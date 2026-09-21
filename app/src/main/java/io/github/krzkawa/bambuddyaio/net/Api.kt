@@ -54,6 +54,9 @@ class Api(private val prefs: Prefs) {
         val b = base().newBuilder()
         b.addPathSegments("api/v1")
         path.trim('/').split('/').filter { it.isNotEmpty() }.forEach { b.addPathSegment(it) }
+        // Several list routes are declared as "/" on the server; without the
+        // trailing segment FastAPI answers with a redirect on every poll.
+        if (path.endsWith("/")) b.addPathSegment("")
         for ((k, v) in query) if (v != null) b.addQueryParameter(k, v.toString())
         return b.build()
     }
@@ -150,7 +153,7 @@ class Api(private val prefs: Prefs) {
 
     // --------------------------------------------------------------- printers
 
-    fun printers(): JSONArray = getArray("printers")
+    fun printers(): JSONArray = getArray("printers/")
 
     fun printerStatus(id: Int): JSONObject = getObject("printers/$id/status")
 
@@ -234,22 +237,30 @@ class Api(private val prefs: Prefs) {
 
     // ------------------------------------------------------- queue / archives
 
-    fun queue(status: String? = null): JSONArray = getArray("queue", "status" to status)
+    fun queue(status: String? = null): JSONArray = getArray("queue/", "status" to status)
     fun queueRemove(itemId: Int) { delete("queue/$itemId") }
 
-    fun archives(limit: Int = 40): JSONArray {
-        // The endpoint has returned either a bare list or a paged object over
-        // its life, so accept both rather than guessing at the server version.
-        val raw = getRaw("archives", "limit" to limit)
-        return try {
-            JSONArray(raw)
-        } catch (e: Exception) {
-            val obj = JSONObject(raw)
-            obj.optJSONArray("items") ?: obj.optJSONArray("archives") ?: JSONArray()
-        }
-    }
+    /** The slim listing: one row per print run, which is all the history screen shows. */
+    fun archives(limit: Int = 40): JSONArray = getArray("archives/slim", "limit" to limit)
 
-    fun statistics(): JSONObject = getObject("statistics")
+    fun statistics(): JSONObject = getObject("archives/stats")
 
     fun systemInfo(): JSONObject = getObject("system/info")
+
+    // ----------------------------------------------------------------- camera
+
+    /**
+     * The stream and snapshot routes take a token in the query string rather
+     * than a header, because the server built them for browser <img> tags.
+     * Tokens last an hour.
+     */
+    fun cameraToken(): String = postObject("printers/camera/stream-token").optString("token")
+
+    fun cameraStreamUrl(printerId: Int, fps: Int, token: String?): HttpUrl =
+        url("printers/$printerId/camera/stream", "fps" to fps, "token" to token?.ifBlank { null })
+
+    fun cameraSnapshotUrl(printerId: Int, token: String?): HttpUrl =
+        url("printers/$printerId/camera/snapshot", "token" to token?.ifBlank { null })
+
+    fun cameraStop(printerId: Int) { post("printers/$printerId/camera/stop") }
 }

@@ -1,0 +1,276 @@
+package io.github.krzkawa.bambuddyaio.ui
+
+import android.content.Context
+import android.nfc.NfcAdapter
+import android.view.ViewGroup
+import android.widget.LinearLayout
+import androidx.appcompat.app.AlertDialog
+import io.github.krzkawa.bambuddyaio.net.Repo
+import io.github.krzkawa.bambuddyaio.nfc.SpoolTag
+import io.github.krzkawa.bambuddyaio.util.objects
+import io.github.krzkawa.bambuddyaio.util.str
+import org.json.JSONObject
+
+/**
+ * Scan a spool's tag, then put it in a slot.
+ *
+ * The tag itself only identifies the filament; the assignment is Bambuddy's
+ * record of which spool sits where, which is what the user asked for. Nothing
+ * is ever written back to the tag.
+ */
+class ScanFragment : BaseFragment() {
+
+    private lateinit var body: LinearLayout
+    private var lookedUpFor: String? = null
+    private var matched: JSONObject? = null
+    private var lookupFailed: String? = null
+
+    override fun build(ctx: Context) {
+        content.addView(header(ctx, "Scan a spool", "Hold the spool's tag against the back of the phone"))
+        body = Ui.col(ctx)
+        content.addView(body, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        observe(ScanState.tag) { tag ->
+            if (tag != null && tag.tagUid != lookedUpFor) lookUp(tag)
+            render()
+        }
+        observe(ScanState.busy) { render() }
+        observe(Repo.selected) { render() }
+        render()
+    }
+
+    private fun lookUp(tag: SpoolTag) {
+        lookedUpFor = tag.tagUid
+        matched = null
+        lookupFailed = null
+        background({ Repo.api.spoolByTag(tag.trayUuid, tag.tagUid) }) { result ->
+            result.onSuccess { matched = it }
+            result.onFailure { lookupFailed = it.message }
+            render()
+        }
+    }
+
+    private fun render() {
+        val ctx = context ?: return
+        body.removeAllViews()
+
+        val tag = ScanState.tag.value
+        if (ScanState.busy.value) {
+            body.addView(Ui.title(ctx, "Reading the tag…"))
+            body.addView(Ui.dim(ctx, "Hold it still for a moment."))
+            return
+        }
+        if (tag == null) {
+            body.addView(nfcStateCard(ctx))
+            return
+        }
+
+        body.addView(tagCard(ctx, tag))
+        body.addView(Ui.space(ctx, 8))
+        body.addView(matchCard(ctx, tag))
+        body.addView(Ui.space(ctx, 8))
+        body.addView(Ui.button(ctx, "Scan another") {
+            ScanState.clear()
+            lookedUpFor = null
+            matched = null
+            render()
+        })
+    }
+
+    private fun nfcStateCard(ctx: Context): LinearLayout {
+        val card = Ui.card(ctx)
+        val adapter = NfcAdapter.getDefaultAdapter(ctx)
+        when {
+            adapter == null -> {
+                card.addView(Ui.title(ctx, "This phone has no NFC"))
+                card.addView(Ui.dim(ctx, "Everything else in the app still works. Spools can be assigned by hand from the AMS screen."))
+            }
+            !adapter.isEnabled -> {
+                card.addView(Ui.title(ctx, "NFC is switched off"))
+                card.addView(Ui.dim(ctx, "Turn it on in Android settings, then come back."))
+            }
+            else -> {
+                card.addView(Ui.title(ctx, "Ready to scan"))
+                card.addView(Ui.dim(ctx, "Hold the spool so its tag touches the back of the phone. Bambu tags sit in the cardboard core, near the rim."))
+            }
+        }
+        return card
+    }
+
+    private fun tagCard(ctx: Context, tag: SpoolTag): LinearLayout {
+        val card = Ui.card(ctx)
+
+        val top = Ui.row(ctx)
+        top.addView(Ui.swatch(ctx, tag.rgba, 34))
+        top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 10, 1))
+        val titles = Ui.col(ctx)
+        titles.addView(Ui.big(ctx, tag.title))
+        titles.addView(Ui.dim(ctx, tag.label))
+        top.addView(titles)
+        card.addView(top, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        if (tag.warning != null) {
+            card.addView(Ui.space(ctx, 6))
+            val warning = Ui.body(ctx, tag.warning!!)
+            warning.setTextColor(Ui.warn(ctx))
+            card.addView(warning)
+        }
+
+        card.addView(Ui.space(ctx, 10))
+        val facts = Ui.row(ctx)
+        fun fact(label: String, value: String?) {
+            if (value == null) return
+            facts.addView(Ui.stat(ctx, label, value))
+            facts.addView(Ui.space(ctx, 1), Ui.lp(ctx, 14, 1))
+        }
+        fact("Brand", tag.brand)
+        fact("Weight", tag.filamentWeightG?.let { "$it g" })
+        fact("Nozzle", listOfNotNull(tag.nozzleTempMin, tag.nozzleTempMax).takeIf { it.size == 2 }
+            ?.let { "${it[0]}–${it[1]}°" })
+        fact("Bed", tag.bedTemp?.let { "$it°" })
+        fact("Dry", tag.dryingTemp?.let { t -> tag.dryingHours?.let { "$t° / ${it}h" } ?: "$t°" })
+        fact("Diameter", tag.diameterMm?.let { String.format("%.2f mm", it) })
+        card.addView(facts, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        card.addView(Ui.space(ctx, 8))
+        card.addView(Ui.tiny(ctx, "UID ${tag.tagUid}" + (tag.trayUuid?.let { "  ·  tray $it" } ?: "")))
+        return card
+    }
+
+    private fun matchCard(ctx: Context, tag: SpoolTag): LinearLayout {
+        val card = Ui.card(ctx)
+        val printerId = Repo.selected.value
+        val spool = matched
+
+        if (lookupFailed != null) {
+            card.addView(Ui.title(ctx, "Could not check your inventory"))
+            card.addView(Ui.dim(ctx, lookupFailed!!))
+            card.addView(Ui.space(ctx, 8))
+            card.addView(Ui.button(ctx, "Try again") { lookUp(tag) })
+            return card
+        }
+
+        if (spool == null) {
+            card.addView(Ui.title(ctx, "Not in your inventory yet"))
+            card.addView(Ui.dim(ctx, "Add it as a new spool, or point this tag at one you already have."))
+            card.addView(Ui.space(ctx, 10))
+            val row = Ui.row(ctx)
+            row.addView(Ui.button(ctx, "Add to inventory", primary = true) { createSpool(ctx, tag) })
+            row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
+            row.addView(Ui.button(ctx, "Link to a spool") { linkExisting(ctx, tag) })
+            card.addView(row, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            return card
+        }
+
+        card.addView(Ui.heading(ctx, "In your inventory"))
+        val line = Ui.row(ctx)
+        line.addView(Ui.swatch(ctx, spool.str("rgba"), 22))
+        line.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
+        val details = Ui.col(ctx)
+        details.addView(Ui.title(ctx, Assign.spoolName(spool)))
+        details.addView(Ui.tiny(ctx, Assign.spoolRemaining(spool)))
+        line.addView(details)
+        card.addView(line, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        card.addView(Ui.space(ctx, 10))
+        if (printerId < 0) {
+            card.addView(Ui.dim(ctx, "Choose a printer on the Printers screen first."))
+            return card
+        }
+
+        card.addView(Ui.heading(ctx, "Assign to a slot on ${Repo.printerName(printerId)}"))
+        card.addView(Ui.space(ctx, 6))
+
+        val slots = Assign.slotsFor(printerId)
+        if (slots.isEmpty()) {
+            card.addView(Ui.dim(ctx, "That printer is not reporting any AMS slots right now."))
+            return card
+        }
+
+        // Slots are laid out as buttons rather than hidden behind a dialog: the
+        // whole point of the scan is to land on a slot in one tap.
+        var row = Ui.row(ctx)
+        slots.forEachIndexed { index, slot ->
+            if (index > 0 && index % 4 == 0) {
+                card.addView(row, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                card.addView(Ui.space(ctx, 6))
+                row = Ui.row(ctx)
+            }
+            val label = if (slot.occupant == null) slot.label else "${slot.label}\n${slot.occupant}"
+            row.addView(Ui.button(ctx, label) {
+                confirmAssign(ctx, spool, printerId, slot)
+            })
+            row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 6, 1))
+        }
+        card.addView(row, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        return card
+    }
+
+    private fun confirmAssign(ctx: Context, spool: JSONObject, printerId: Int, slot: Assign.Slot) {
+        val occupied = slot.occupant
+        if (occupied == null) {
+            Assign.send(spool.optInt("id"), printerId, slot) { toast(it) }
+            return
+        }
+        AlertDialog.Builder(ctx)
+            .setTitle("Replace what is in ${slot.label}?")
+            .setMessage("That slot currently holds $occupied.")
+            .setPositiveButton("Assign") { _, _ ->
+                Assign.send(spool.optInt("id"), printerId, slot) { toast(it) }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Creates an inventory entry straight from what the tag said. */
+    private fun createSpool(ctx: Context, tag: SpoolTag) {
+        val payload = JSONObject()
+            .put("material", (tag.material ?: "Unknown").take(50))
+            .put("label_weight", tag.filamentWeightG ?: 1000)
+            .put("data_origin", "nfc")
+            .put("tag_type", if (tag.source == SpoolTag.Source.BAMBU) "bambu" else "openspool")
+        tag.detailedType?.let { payload.put("subtype", it) }
+        tag.brand?.let { payload.put("brand", it) }
+        tag.rgba?.takeIf { it.length == 8 }?.let { payload.put("rgba", it) }
+        tag.nozzleTempMin?.let { payload.put("nozzle_temp_min", it) }
+        tag.nozzleTempMax?.let { payload.put("nozzle_temp_max", it) }
+        payload.put("tag_uid", tag.tagUid)
+        tag.trayUuid?.let { payload.put("tray_uuid", it) }
+
+        background({ Repo.api.createSpool(payload) }) { result ->
+            result.onSuccess {
+                matched = it
+                toast("Added to your inventory")
+                render()
+            }
+            result.onFailure { toast(it.message ?: "Could not add the spool") }
+        }
+    }
+
+    /** Points this tag at a spool the user already has. */
+    private fun linkExisting(ctx: Context, tag: SpoolTag) {
+        background({ Repo.api.spools() }) { result ->
+            val spools = result.getOrNull().objects()
+            if (spools.isEmpty()) {
+                toast(result.exceptionOrNull()?.message ?: "No spools in your inventory yet")
+                return@background
+            }
+            val labels = spools.map { "${Assign.spoolName(it)}  —  ${Assign.spoolRemaining(it)}" }.toTypedArray()
+            AlertDialog.Builder(ctx)
+                .setTitle("Which spool is this?")
+                .setItems(labels) { _, which ->
+                    val chosen = spools[which]
+                    background({ Repo.api.linkTag(chosen.optInt("id"), tag.tagUid, tag.trayUuid) }) { linked ->
+                        linked.onSuccess {
+                            matched = it
+                            toast("Tag linked")
+                            render()
+                        }
+                        linked.onFailure { toast(it.message ?: "Could not link the tag") }
+                    }
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+    }
+}
