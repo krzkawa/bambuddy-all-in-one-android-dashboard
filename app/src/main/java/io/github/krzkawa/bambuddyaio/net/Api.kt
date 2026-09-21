@@ -252,6 +252,35 @@ class Api(private val prefs: Prefs) {
 
     fun assignments(): JSONArray = getArray("inventory/assignments")
 
+    /**
+     * Edits a spool. Only send the fields that actually changed: the server
+     * applies exactly the keys present, and setting `weight_used` also sets
+     * `weight_locked` (`inventory.py:1394`), which stops the AMS syncing this
+     * spool's weight. Sending an unchanged weight would lock it by accident.
+     */
+    fun updateSpool(spoolId: Int, payload: JSONObject): JSONObject =
+        patchObject("inventory/spools/$spoolId", payload)
+
+    /** Soft delete: sets archived_at, so the spool leaves the default listing. */
+    fun archiveSpool(spoolId: Int): JSONObject = postObject("inventory/spools/$spoolId/archive")
+
+    fun restoreSpool(spoolId: Int): JSONObject = postObject("inventory/spools/$spoolId/restore")
+
+    /**
+     * Zeroes the "total consumed" counter only. Remaining weight is deliberately
+     * left alone — the server moves a baseline rather than touching `weight_used`
+     * (`inventory.py:1465`). Do not label this as emptying or refilling a spool.
+     */
+    fun resetConsumedCounter(spoolId: Int): JSONObject =
+        postObject("inventory/spools/$spoolId/reset-consumed-counter")
+
+    /** Print runs that drew from this spool, newest first. */
+    fun spoolUsage(spoolId: Int, limit: Int = 25): JSONArray =
+        getArray("inventory/spools/$spoolId/usage", "limit" to limit)
+
+    /** Storage locations, each with the number of spools in it. */
+    fun locations(): JSONArray = getArray("inventory/locations")
+
     fun unassign(printerId: Int, amsId: Int, trayId: Int) {
         delete("inventory/assignments/$printerId/$amsId/$trayId")
     }
