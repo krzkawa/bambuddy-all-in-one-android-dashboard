@@ -70,27 +70,14 @@ class MjpegView(ctx: Context) : ImageView(ctx) {
 
     private fun pump(stream: InputStream) {
         val chunk = ByteArray(16 * 1024)
-        var buffer = ByteArray(0)
+        val frames = MjpegFrames()
         var lastFrameAt = 0L
 
         while (running) {
             val read = stream.read(chunk)
             if (read < 0) break
-            buffer += chunk.copyOf(read)
 
-            while (true) {
-                val start = indexOfMarker(buffer, 0xD8, 0)
-                if (start < 0) {
-                    // Nothing that looks like a frame; do not let junk pile up.
-                    if (buffer.size > 4 * 1024 * 1024) buffer = ByteArray(0)
-                    break
-                }
-                val end = indexOfMarker(buffer, 0xD9, start + 2)
-                if (end < 0) break
-
-                val frame = buffer.copyOfRange(start, end + 2)
-                buffer = buffer.copyOfRange(end + 2, buffer.size)
-
+            for (frame in frames.append(chunk, read)) {
                 // Decoding every frame would peg the CPU on an old phone, and
                 // the eye cannot tell above a few frames a second anyway.
                 val now = System.currentTimeMillis()
@@ -126,15 +113,5 @@ class MjpegView(ctx: Context) : ImageView(ctx) {
 
     private fun report(message: String) {
         main.post { onError?.invoke(message) }
-    }
-
-    /** Finds the next 0xFF <marker> pair at or after [from]. */
-    private fun indexOfMarker(data: ByteArray, marker: Int, from: Int): Int {
-        var i = from.coerceAtLeast(0)
-        while (i < data.size - 1) {
-            if ((data[i].toInt() and 0xFF) == 0xFF && (data[i + 1].toInt() and 0xFF) == marker) return i
-            i++
-        }
-        return -1
     }
 }
