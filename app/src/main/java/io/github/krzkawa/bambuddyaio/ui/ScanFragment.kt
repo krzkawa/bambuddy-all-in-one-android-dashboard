@@ -10,7 +10,6 @@ import io.github.krzkawa.bambuddyaio.net.Repo
 import io.github.krzkawa.bambuddyaio.nfc.BambuTag
 import io.github.krzkawa.bambuddyaio.nfc.ScanFailure
 import io.github.krzkawa.bambuddyaio.nfc.SpoolTag
-import io.github.krzkawa.bambuddyaio.util.objects
 import io.github.krzkawa.bambuddyaio.util.str
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -220,7 +219,7 @@ class ScanFragment : BaseFragment() {
             val row = Ui.row(ctx)
             row.addView(Ui.button(ctx, "Add to inventory", primary = true) { createSpool(tag) })
             row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
-            row.addView(Ui.button(ctx, "Link to a spool") { linkExisting(ctx, tag) })
+            row.addView(Ui.button(ctx, "Link to a spool") { linkExisting(tag) })
             card.addView(row, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             return card
         }
@@ -305,29 +304,16 @@ class ScanFragment : BaseFragment() {
     }
 
     /** Points this tag at a spool the user already has. */
-    private fun linkExisting(ctx: Context, tag: SpoolTag) {
-        background({ Repo.api.spools() }) { result ->
-            val spools = result.getOrNull().objects()
-            if (spools.isEmpty()) {
-                toast(result.exceptionOrNull()?.message ?: "No spools in your inventory yet")
-                return@background
-            }
-            val labels = spools.map { "${Assign.spoolName(it)}  —  ${Assign.spoolRemaining(it)}" }.toTypedArray()
-            AlertDialog.Builder(ctx)
-                .setTitle("Which spool is this?")
-                .setItems(labels) { _, which ->
-                    val chosen = spools[which]
-                    background({ Repo.api.linkTag(chosen.optInt("id"), tag.tagUid, tag.trayUuid) }) { linked ->
-                        linked.onSuccess {
-                            matched = it
-                            toast("Tag linked")
-                            render()
-                        }
-                        linked.onFailure { toast(it.message ?: "Could not link the tag") }
-                    }
+    private fun linkExisting(tag: SpoolTag) {
+        pickSpool("Which spool is this?") { chosen ->
+            background({ Repo.api.linkTag(chosen.optInt("id"), tag.tagUid, tag.trayUuid) }) { linked ->
+                linked.onSuccess {
+                    matched = it
+                    toast("Tag linked")
+                    render()
                 }
-                .setNegativeButton("Cancel", null)
-                .show()
+                linked.onFailure { toast(it.message ?: "Could not link the tag") }
+            }
         }
     }
 
