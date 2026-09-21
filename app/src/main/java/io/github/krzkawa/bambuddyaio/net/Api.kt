@@ -15,7 +15,20 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-class ApiError(val code: Int, message: String) : IOException(message)
+/**
+ * A failed call, with the server's own structured answer when it sent one.
+ *
+ * FastAPI's `detail` is usually a string, but some routes answer with an object
+ * the caller is meant to act on rather than only show — starting a queued print
+ * answers a 409 with the filament each slot is short of, so the app can offer
+ * "print anyway" instead of a dead end. [detail] carries that object; [message]
+ * stays the sentence to put in front of the user.
+ */
+class ApiError(
+    val code: Int,
+    message: String,
+    val detail: JSONObject? = null
+) : IOException(message)
 
 /**
  * How long the camera stream will wait for the next byte before giving up.
@@ -97,7 +110,7 @@ class Api(private val prefs: Prefs) {
         }
         response.use {
             val text = it.body?.string().orEmpty()
-            if (!it.isSuccessful) throw ApiError(it.code, detail(it.code, text))
+            if (!it.isSuccessful) throw ApiError(it.code, detail(it.code, text), structured(text))
             return text
         }
     }
@@ -117,11 +130,24 @@ class Api(private val prefs: Prefs) {
             when (d) {
                 null -> fallback
                 is JSONArray -> d.optJSONObject(0)?.optString("msg").takeIf { !it.isNullOrBlank() } ?: fallback
+                // An object detail is for the caller to act on, not to read out.
+                // Printing it raw puts a line of JSON in a toast, so say the
+                // little of it that is words and let the caller do the rest.
+                is JSONObject -> d.optString("message").takeIf { it.isNotBlank() }
+                    ?: d.optString("code").takeIf { it.isNotBlank() }?.replace('_', ' ')
+                    ?: fallback
                 else -> d.toString()
             }
         } catch (e: Exception) {
             fallback
         }
+    }
+
+    /** The `detail` object of an error body, for the routes that answer with one. */
+    private fun structured(body: String): JSONObject? = try {
+        JSONObject(body).optJSONObject("detail")
+    } catch (e: Exception) {
+        null
     }
 
     private fun req(url: HttpUrl) = authHeaders(Request.Builder().url(url))
@@ -143,6 +169,15 @@ class Api(private val prefs: Prefs) {
 
     fun postObject(path: String, payload: JSONObject? = null, vararg q: Pair<String, Any?>): JSONObject =
         JSONObject(post(path, payload, *q).ifBlank { "{}" })
+
+    /**
+     * Posts a bare JSON array as the whole body.
+     *
+     * A FastAPI route declared as `object_ids: list[int]` takes the array
+     * itself, not an object wrapping it, and wrapping it answers 422.
+     */
+    fun postArray(path: String, payload: JSONArray, vararg q: Pair<String, Any?>): String =
+        call(req(url(path, *q)).post(payload.toString().toRequestBody(json)).build())
 
     fun patchObject(path: String, payload: JSONObject, vararg q: Pair<String, Any?>): JSONObject =
         JSONObject(call(req(url(path, *q)).patch(body(payload)).build()).ifBlank { "{}" })
@@ -202,6 +237,35 @@ class Api(private val prefs: Prefs) {
     }
     fun setLight(id: Int, on: Boolean) {
         post("printers/$id/chamber-light", null, "on" to on)
+    }
+
+    /**
+     * The objects on the plate the printer is running, each with whether it has
+     * already been skipped. The printer only knows them while it is printing.
+     */
+    fun printObjects(id: Int): JSONObject = getObject("printers/$id/print/objects")
+
+    /**
+     * Abandons individual objects mid-print. The firmware cannot put one back,
+     * so the caller must be sure before it asks.
+     */
+    fun skipObjects(id: Int, objectIds: List<Int>) {
+        val array = JSONArray()
+        objectIds.forEach { array.put(it) }
+        postArray("printers/$id/print/skip-objects", array)
+    }
+
+    /**
+     * Runs one of the actions a fault itself suggested.
+     *
+     * [printError] is the fault's `full_code` — the hex key the firmware
+     * matches on, 8 or 16 characters. The server validates the shape, and a
+     * short code with its underscore left in is rejected outright.
+     */
+    fun hmsAction(id: Int, printError: String, action: String, jobId: String? = null) {
+        val payload = JSONObject().put("print_error", printError).put("action", action)
+        if (!jobId.isNullOrBlank()) payload.put("job_id", jobId)
+        post("printers/$id/hms/execute-action", payload)
     }
 
     fun amsLoad(id: Int, trayId: Int) { post("printers/$id/ams/load", null, "tray_id" to trayId) }
@@ -297,6 +361,18 @@ class Api(private val prefs: Prefs) {
 
     fun queue(status: String? = null): JSONArray = getArray("queue/", "status" to status)
     fun queueRemove(itemId: Int) { delete("queue/$itemId") }
+
+    /**
+     * Starts a staged queue item.
+     *
+     * The server checks the assigned spools first and answers **409** with a
+     * per-slot filament deficit when one cannot cover the job
+     * (`print_queue.py:2416`). That is a question, not a failure: ask him, then
+     * call again with [skipFilamentCheck] true, which the server also
+     * remembers so its scheduler does not re-block the item on the next tick.
+     */
+    fun queueStart(itemId: Int, skipFilamentCheck: Boolean = false): JSONObject =
+        postObject("queue/$itemId/start", null, "skip_filament_check" to skipFilamentCheck)
 
     /** The slim listing: one row per print run, which is all the history screen shows. */
     fun archives(limit: Int = 40): JSONArray = getArray("archives/slim", "limit" to limit)

@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import androidx.appcompat.app.AlertDialog
+import io.github.krzkawa.bambuddyaio.net.ApiError
 import io.github.krzkawa.bambuddyaio.net.Repo
 import io.github.krzkawa.bambuddyaio.util.dbl
 import io.github.krzkawa.bambuddyaio.util.int
@@ -60,7 +61,7 @@ class QueueFragment : BaseFragment() {
         val line = Ui.row(ctx)
 
         val info = Ui.col(ctx)
-        val name = item.str("archive_name") ?: item.str("library_file_name") ?: "Queued print"
+        val name = Queue.itemName(item)
         info.addView(Ui.body(ctx, name))
         val bits = ArrayList<String>()
         item.str("status")?.let { bits.add(it) }
@@ -68,7 +69,16 @@ class QueueFragment : BaseFragment() {
         item.int("print_time_seconds")?.takeIf { it > 0 }?.let { bits.add(Ui.minutes(it / 60)) }
         item.dbl("filament_used_grams")?.takeIf { it > 0 }?.let { bits.add("${it.toInt()} g") }
         info.addView(Ui.tiny(ctx, bits.joinToString(" · ")))
+        Queue.waitingReason(item)?.let { info.addView(Ui.tiny(ctx, it)) }
         line.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        // Only a pending item can be started; the route answers 400 for
+        // anything else, so an item already printing gets no button at all
+        // rather than one that always fails.
+        if (Queue.canStart(item)) {
+            line.addView(Ui.button(ctx, "Start", primary = true) { confirmStart(ctx, item, name) })
+            line.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
+        }
 
         line.addView(Ui.button(ctx, "Remove") {
             AlertDialog.Builder(ctx)
@@ -85,5 +95,63 @@ class QueueFragment : BaseFragment() {
         })
         card.addView(line, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         return card
+    }
+
+    /** A print is a machine moving in another room, so it is asked for twice. */
+    private fun confirmStart(ctx: Context, item: JSONObject, name: String) {
+        val printer = item.str("printer_name")
+            ?: item.int("printer_id")?.let { Repo.printerName(it) }
+        AlertDialog.Builder(ctx)
+            .setTitle("Start this print?")
+            .setMessage(if (printer == null) name else "$name\n\nOn $printer")
+            .setPositiveButton("Start") { _, _ -> start(ctx, item, name, skipFilamentCheck = false) }
+            .setNegativeButton("Not yet", null)
+            .show()
+    }
+
+    /**
+     * Asks the server to start the item, and turns its one refusal worth
+     * arguing with into a question.
+     *
+     * A 409 carrying a filament deficit means the assigned spools cannot cover
+     * the job as far as the server can tell. That is often a spool it has the
+     * wrong weight for, so it is his call, not a dead end: the same call with
+     * the check skipped goes through, and the server remembers the decision so
+     * its own scheduler does not re-block the item a moment later.
+     */
+    private fun start(ctx: Context, item: JSONObject, name: String, skipFilamentCheck: Boolean) {
+        val id = item.optInt("id")
+        background({ Repo.api.queueStart(id, skipFilamentCheck) }) { result ->
+            result.onSuccess {
+                Repo.notice("Started $name")
+                toast("Starting $name")
+                Repo.refresh()
+                load()
+            }
+            result.onFailure { failure ->
+                val shortfalls = (failure as? ApiError)?.let { Queue.shortfalls(it) }
+                if (shortfalls == null) {
+                    toast(failure.message ?: "Could not start it")
+                } else {
+                    askAboutFilament(ctx, item, name, shortfalls)
+                }
+            }
+        }
+    }
+
+    private fun askAboutFilament(
+        ctx: Context,
+        item: JSONObject,
+        name: String,
+        shortfalls: List<Queue.Shortfall>
+    ) {
+        AlertDialog.Builder(ctx)
+            .setTitle("Not enough filament")
+            .setMessage(Queue.shortfallMessage(shortfalls) + "\n\nPrint it anyway?")
+            .setPositiveButton("Print anyway") { _, _ ->
+                start(ctx, item, name, skipFilamentCheck = true)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 }
