@@ -34,6 +34,19 @@ class SettingsFragment : BaseFragment() {
             else -> "No credentials — only works if the server has authentication off"
         }
         connection.addView(Ui.tiny(ctx, how))
+        if (prefs.hasCredentials) {
+            connection.addView(
+                Ui.tiny(
+                    ctx,
+                    if (prefs.secretsEncrypted) {
+                        "Stored encrypted on this phone, and left out of any backup."
+                    } else {
+                        "Stored in this app's private settings and left out of any backup. " +
+                            "This phone's keystore would not take them, so they are not encrypted."
+                    }
+                )
+            )
+        }
         connection.addView(Ui.space(ctx, 8))
         val row = Ui.row(ctx)
         row.addView(Ui.button(ctx, "Change") {
@@ -69,6 +82,23 @@ class SettingsFragment : BaseFragment() {
             (activity as? MainActivity)?.recreate()
         })
         display.addView(keepRow, wide(ctx))
+        val fullRow = Ui.row(ctx)
+        fullRow.addView(
+            Ui.body(ctx, "Use the whole screen"),
+            Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        fullRow.addView(Ui.button(ctx, if (prefs.fullScreen) "On" else "Off", primary = prefs.fullScreen) {
+            prefs.fullScreen = !prefs.fullScreen
+            (activity as? MainActivity)?.recreate()
+        })
+        display.addView(fullRow, wide(ctx))
+        display.addView(
+            Ui.tiny(
+                ctx,
+                "On hides the status and navigation bars, which is what makes all ten tabs fit. " +
+                    "Swipe in from an edge to bring them back for a moment."
+            )
+        )
         display.addView(Ui.tiny(ctx, "The app is locked to landscape either way."))
         body.addView(display)
         body.addView(Ui.space(ctx, 8))
@@ -90,8 +120,11 @@ class SettingsFragment : BaseFragment() {
         body.addView(Ui.space(ctx, 8))
 
         val about = Ui.card(ctx)
-        about.addView(Ui.heading(ctx, "Server details"))
-        val details = Ui.dim(ctx, "Loading…")
+        about.addView(Ui.heading(ctx, "Versions"))
+        // He installs every build from the same release link, so the app has to
+        // say which one it is; the server version alone never answered that.
+        about.addView(Ui.body(ctx, "This app ${appVersion(ctx)}"))
+        val details = Ui.dim(ctx, "Reading the server version…")
         about.addView(details)
         background({ Repo.api.systemInfo() }) { result ->
             result.onSuccess { info ->
@@ -101,6 +134,16 @@ class SettingsFragment : BaseFragment() {
             result.onFailure { details.text = it.message ?: "Could not read the server details" }
         }
         body.addView(about)
+    }
+
+    /**
+     * Read back off the installed package rather than from BuildConfig, so it
+     * is the APK actually on the phone that is being reported.
+     */
+    private fun appVersion(ctx: Context): String = try {
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "unknown"
+    } catch (e: Exception) {
+        "unknown"
     }
 
     private fun wide(ctx: Context) =
