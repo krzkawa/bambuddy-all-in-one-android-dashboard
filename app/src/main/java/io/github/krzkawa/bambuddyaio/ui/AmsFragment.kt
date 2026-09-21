@@ -203,7 +203,7 @@ class AmsFragment : BaseFragment() {
         forcedTrayId: Int? = null
     ): LinearLayout {
         val trayId = forcedTrayId ?: tray.optInt("id")
-        val slot = Assign.Slot(amsId, trayId, "", null)
+        val slot = Assign.Slot(amsId, trayId, Assign.slotName(amsId, trayId), null)
         val isLoaded = loadedTray == slot.globalTrayId || tray.int("state") == TRAY_LOADED
 
         val row = Ui.row(ctx)
@@ -243,7 +243,7 @@ class AmsFragment : BaseFragment() {
         info.addView(Ui.tiny(ctx, bits.joinToString(" · ").ifBlank { "No filament reported" }))
         row.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        row.addView(Ui.button(ctx, "Assign") { chooseSpoolFor(ctx, printerId, slot) })
+        row.addView(Ui.button(ctx, "Assign") { chooseSpoolFor(printerId, slot) })
         row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 6, 1))
         if (isLoaded) {
             row.addView(Ui.button(ctx, "Unload") {
@@ -264,22 +264,9 @@ class AmsFragment : BaseFragment() {
     }
 
     /** Slot-first assignment: pick the slot on screen, then choose the spool. */
-    private fun chooseSpoolFor(ctx: Context, printerId: Int, slot: Assign.Slot) {
-        toast("Loading spools…")
-        background({ Repo.api.spools() }) { result ->
-            val spools = result.getOrNull().objects()
-            if (spools.isEmpty()) {
-                toast(result.exceptionOrNull()?.message ?: "No spools in your inventory yet")
-                return@background
-            }
-            val labels = spools.map { "${Assign.spoolName(it)}  —  ${Assign.spoolRemaining(it)}" }.toTypedArray()
-            AlertDialog.Builder(ctx)
-                .setTitle("Assign which spool?")
-                .setItems(labels) { _, which ->
-                    Assign.send(spools[which].optInt("id"), printerId, slot) { toast(it) }
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
+    private fun chooseSpoolFor(printerId: Int, slot: Assign.Slot) {
+        pickSpool("Assign to ${slot.label}") { spool ->
+            Assign.send(spool.optInt("id"), printerId, slot) { toast(it) }
         }
     }
 
