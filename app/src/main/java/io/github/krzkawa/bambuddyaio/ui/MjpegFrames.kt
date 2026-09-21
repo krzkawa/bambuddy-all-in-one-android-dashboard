@@ -26,8 +26,26 @@ class MjpegFrames(private val maxBufferedBytes: Int = DEFAULT_MAX_BUFFERED_BYTES
     /** Bytes of [buffer] that hold stream data; everything past this is spare capacity. */
     private var length = 0
 
-    /** How many bytes are waiting for the rest of their frame. */
+    /** How many bytes are held, either part of a frame or not yet recognised as junk. */
     val buffered: Int get() = length
+
+    /**
+     * True when [buffered] is the beginning of a real frame and the splitter is simply
+     * waiting for the rest of it; false when the held bytes are not a frame yet.
+     *
+     * This is what tells "this frame is big or the network is slow" apart from "this
+     * stream is not MJPEG and the buffer is filling with nothing".
+     */
+    val awaitingFrame: Boolean
+        get() = length >= 2 && buffer.at(0) == 0xFF && buffer.at(1) == SOI
+
+    /**
+     * Bytes thrown away since this splitter was made: multipart boundaries, HTTP headers,
+     * anything before the first frame, and whatever a resync stepped over. A number that
+     * climbs while no frames arrive means the stream is not what we think it is.
+     */
+    var discardedBytes: Long = 0
+        private set
 
     /**
      * Adds the first [count] bytes of [data] to the stream and returns every frame that
@@ -46,6 +64,7 @@ class MjpegFrames(private val maxBufferedBytes: Int = DEFAULT_MAX_BUFFERED_BYTES
 
         var frames: MutableList<ByteArray>? = null
         var consumed = 0
+        var framedBytes = 0
 
         while (true) {
             val start = indexOfStartOfImage(buffer, consumed, length)
@@ -69,16 +88,21 @@ class MjpegFrames(private val maxBufferedBytes: Int = DEFAULT_MAX_BUFFERED_BYTES
                 else -> {
                     val frame = buffer.copyOfRange(start, end)
                     (frames ?: mutableListOf<ByteArray>().also { frames = it }).add(frame)
+                    framedBytes += frame.size
                     consumed = end
                 }
             }
         }
 
+        discardedBytes += (consumed - framedBytes).toLong()
         discard(consumed)
 
         // A buffer this large without a frame in it means the framing is lost, and holding
         // on to it only risks the heap on a phone that has little of it.
-        if (length > maxBufferedBytes) reset()
+        if (length > maxBufferedBytes) {
+            discardedBytes += length.toLong()
+            reset()
+        }
 
         return frames ?: emptyList()
     }
@@ -88,6 +112,8 @@ class MjpegFrames(private val maxBufferedBytes: Int = DEFAULT_MAX_BUFFERED_BYTES
         length = 0
         if (buffer.size > INITIAL_CAPACITY) buffer = ByteArray(INITIAL_CAPACITY)
     }
+
+    private fun ByteArray.at(index: Int): Int = this[index].toInt() and 0xFF
 
     private fun ensureCapacity(needed: Int) {
         if (needed <= buffer.size) return

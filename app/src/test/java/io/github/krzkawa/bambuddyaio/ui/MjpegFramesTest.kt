@@ -209,6 +209,34 @@ class MjpegFramesTest {
     }
 
     @Test
+    fun `a slow frame is distinguishable from a stream that is not MJPEG`() {
+        val frame = Jpeg.frame(scanData = ByteArray(400) { it.toByte() })
+
+        // Half a real frame: bytes are held, but they are going somewhere.
+        frames.append(frame.copyOfRange(0, 100))
+        assertTrue(frames.awaitingFrame)
+        assertEquals(100, frames.buffered)
+
+        frames.reset()
+
+        // Bytes that are not a frame at all are not held, and are counted as thrown away.
+        frames.append(ByteArray(100) { 0x41 })
+        assertEquals(false, frames.awaitingFrame)
+        assertEquals(0, frames.buffered)
+        assertTrue(frames.discardedBytes >= 100)
+    }
+
+    @Test
+    fun `bytes that are part of a frame are not counted as discarded`() {
+        val frame = Jpeg.frame()
+        val boundary = "\r\n--frame\r\n".toByteArray()
+
+        frames.append(boundary + frame)
+
+        assertEquals(boundary.size.toLong(), frames.discardedBytes)
+    }
+
+    @Test
     fun `the splitter keeps working across many frames`() {
         val sent = (1..50).map { Jpeg.frame(scanData = ByteArray(it * 7) { i -> i.toByte() }) }
         val stream = sent.reduce { a, b -> a + b }
@@ -224,5 +252,7 @@ class MjpegFramesTest {
         assertEquals(sent.size, received.size)
         for (i in sent.indices) assertArrayEquals(sent[i], received[i])
         assertEquals(0, frames.buffered)
+        // Back-to-back frames means nothing between them to throw away.
+        assertEquals(0L, frames.discardedBytes)
     }
 }
