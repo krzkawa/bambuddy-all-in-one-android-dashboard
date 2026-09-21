@@ -14,6 +14,8 @@ jobs:
   apk:
     name: Build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +41,19 @@ jobs:
           name: bambuddy-aio-apk
           path: out/*.apk
           if-no-files-found: error
+
+      # An artifact downloads as a zip, which is miserable to unpack on an old
+      # phone. A release gives the phone's browser a direct link to the APK.
+      - name: Publish the APK where a phone can reach it
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Built from ${{ github.sha }}. Download bambuddy-aio.apk straight onto the phone and open it."
+          gh release view latest >/dev/null 2>&1 \
+            || gh release create latest --title "Latest build" --notes "$notes" --prerelease
+          gh release edit latest --notes "$notes"
+          gh release upload latest out/bambuddy-aio.apk out/bambuddy-aio-debug.apk --clobber
 
   smoke:
     name: Launch on Android 7

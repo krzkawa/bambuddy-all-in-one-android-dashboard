@@ -9,12 +9,10 @@ is locked to landscape so it can sit propped up next to a printer.
 
 ## Getting the app
 
-Every push builds an APK. Open the latest run under
-[Actions](../../actions/workflows/build.yml), and download the
-`bambuddy-aio-apk` artifact at the bottom of the page. It holds two files:
-
-- `bambuddy-aio.apk` — the one to install.
-- `bambuddy-aio-debug.apk` — same app with logging left in.
+Every push to `main` rebuilds the app and replaces the download at
+[Releases → latest](../../releases/tag/latest). Open that page in the phone's
+browser and tap `bambuddy-aio.apk`; there is also `bambuddy-aio-debug.apk`,
+the same app with logging left in.
 
 The phone will ask permission to install an app from outside the Play Store.
 
