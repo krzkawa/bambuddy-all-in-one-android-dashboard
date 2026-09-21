@@ -69,9 +69,8 @@ class StatsFragment : BaseFragment() {
         val row2 = Ui.row(ctx)
         row2.addView(Ui.stat(ctx, "Print time", "${(stats.dbl("total_print_time_hours") ?: 0.0).toInt()} h"))
         gap(ctx, row2)
-        row2.addView(Ui.stat(ctx, "Filament", "${((stats.dbl("total_filament_grams") ?: 0.0) / 1000.0).let {
-            String.format("%.1f", it)
-        }} kg"))
+        val kilos = (stats.dbl("total_filament_grams") ?: 0.0) / 1000.0
+        row2.addView(Ui.stat(ctx, "Filament", String.format("%.1f kg", kilos)))
         gap(ctx, row2)
         row2.addView(Ui.stat(ctx, "Cost", String.format("%.2f", stats.dbl("total_cost") ?: 0.0)))
         stats.dbl("total_energy_kwh")?.takeIf { it > 0 }?.let {
