@@ -61,6 +61,12 @@ class MjpegView(ctx: Context) : ImageView(ctx) {
         running = false
         worker?.interrupt()
         worker = null
+        // Drop the last frame's bitmap rather than hold a full-screen image
+        // while the user is on another screen. Clearing the view first, because
+        // recycling a bitmap that is still being drawn crashes on draw.
+        setImageDrawable(null)
+        last?.recycle()
+        last = null
     }
 
     override fun onDetachedFromWindow() {
