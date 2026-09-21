@@ -1,5 +1,7 @@
 package io.github.krzkawa.bambuddyaio.net
 
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -14,6 +16,15 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class ApiError(val code: Int, message: String) : IOException(message)
+
+/**
+ * How long the camera stream will wait for the next byte before giving up.
+ *
+ * Far longer than any real gap between frames at the frame rates this app asks
+ * for, and short enough that a stream which has silently died is noticed while
+ * the user is still looking at the screen.
+ */
+const val STREAM_READ_TIMEOUT_SECONDS = 30L
 
 /**
  * Thin blocking client for a self-hosted Bambuddy server's REST API.
@@ -34,9 +45,19 @@ class Api(private val prefs: Prefs) {
         .retryOnConnectionFailure(true)
         .build()
 
-    /** Separate client for the camera: an MJPEG stream never stops arriving. */
+    /**
+     * Separate client for the camera: an MJPEG stream arrives frame by frame for
+     * as long as the screen is open, so the read timeout above would cut it off.
+     *
+     * It is not unlimited, though, and that matters more than it looks. A thread
+     * blocked in a socket read ignores Thread.interrupt(), so a stream that
+     * simply stops arriving — the printer dropping off mid-stream — would park
+     * its reader forever, holding a thread and a socket for the life of the
+     * process. Cancelling the call is what normally frees it; this timeout is
+     * the backstop for when nothing cancels it at all.
+     */
     val streamClient: OkHttpClient = client.newBuilder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(STREAM_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .build()
 
     // ---------------------------------------------------------------- plumbing
@@ -263,4 +284,21 @@ class Api(private val prefs: Prefs) {
         url("printers/$printerId/camera/snapshot", "token" to token?.ifBlank { null })
 
     fun cameraStop(printerId: Int) { post("printers/$printerId/camera/stop") }
+
+    /**
+     * Tells the server the stream is finished, without blocking the caller.
+     *
+     * The moment to say this is as the camera screen goes away, and by then
+     * there is no lifecycle left to hang a blocking call on and nothing useful
+     * to do with the answer. So it goes out on OkHttp's own dispatcher and its
+     * outcome is dropped: either the server hears it, or the stream it is still
+     * holding open times out by itself.
+     */
+    fun cameraStopAsync(printerId: Int) {
+        val request = req(url("printers/$printerId/camera/stop")).post(body(null)).build()
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) = Unit
+            override fun onResponse(call: Call, response: Response) = response.close()
+        })
+    }
 }
