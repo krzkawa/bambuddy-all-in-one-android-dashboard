@@ -7,6 +7,7 @@ import android.widget.LinearLayout
 import androidx.appcompat.app.AlertDialog
 import io.github.krzkawa.bambuddyaio.net.Repo
 import io.github.krzkawa.bambuddyaio.nfc.BambuTag
+import io.github.krzkawa.bambuddyaio.nfc.ScanFailure
 import io.github.krzkawa.bambuddyaio.nfc.SpoolTag
 import io.github.krzkawa.bambuddyaio.util.objects
 import io.github.krzkawa.bambuddyaio.util.str
@@ -123,6 +124,15 @@ class ScanFragment : BaseFragment() {
             val warning = Ui.body(ctx, tag.warning!!)
             warning.setTextColor(Ui.warn(ctx))
             card.addView(warning)
+            when (tag.failure) {
+                ScanFailure.TAG_LOST ->
+                    card.addView(Ui.tiny(ctx, "Hold the spool still against the back of the phone and scan again."))
+                ScanFailure.UNSUPPORTED_DEVICE ->
+                    card.addView(Ui.tiny(ctx, "Nothing to retry — this phone's NFC chip cannot read these tags. Link the spool by hand below."))
+                ScanFailure.AUTH_FAILED ->
+                    card.addView(Ui.tiny(ctx, "Not a genuine Bambu tag. You can still link it to a spool below."))
+                else -> {}
+            }
         }
 
         card.addView(Ui.space(ctx, 10))

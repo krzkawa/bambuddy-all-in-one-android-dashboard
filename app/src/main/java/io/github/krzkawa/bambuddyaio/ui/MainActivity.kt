@@ -135,7 +135,9 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
     override fun onTagDiscovered(tag: Tag) {
         ScanState.reading()
         lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) { BambuTag.read(tag) }
+            // Passing the context lets the reader tell "this phone cannot do
+            // Mifare Classic" apart from "this tag isn't a Bambu tag".
+            val result = withContext(Dispatchers.IO) { BambuTag.read(tag, applicationContext) }
             ScanState.found(result)
             withContext(Dispatchers.Main) {
                 if (current != SCAN_TAB) showTab(SCAN_TAB)
