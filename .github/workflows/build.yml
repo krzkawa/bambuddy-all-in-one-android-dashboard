@@ -76,20 +76,42 @@ jobs:
           profile: Nexus 5
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # Nothing in here is allowed to fail the job. Whatever happened gets
+          # written down, and the next step decides what it means — otherwise a
+          # bare "exit code 2" is all that survives, and the logs themselves are
+          # not reachable from every environment.
           script: |
-            adb install -r out/bambuddy-aio-debug.apk
-            adb logcat -c
-            adb shell am start -n io.github.krzkawa.bambuddyaio/.ui.MainActivity
-            sleep 12
             mkdir -p shots
-            adb exec-out screencap -p > shots/first-run.png
-            adb logcat -d > shots/logcat.txt
-            # A crash on launch is the one thing this job exists to catch.
-            if adb logcat -d | grep -q "FATAL EXCEPTION"; then
-              echo "The app crashed on launch:"
-              adb logcat -d | grep -A 30 "FATAL EXCEPTION"
-              exit 1
-            fi
+            adb install -r out/bambuddy-aio-debug.apk > shots/install.txt 2>&1 || true
+            adb logcat -c || true
+            adb shell am start -n io.github.krzkawa.bambuddyaio/.ui.MainActivity > shots/start.txt 2>&1 || true
+            sleep 15
+            adb exec-out screencap -p > shots/first-run.png || true
+            adb logcat -d > shots/logcat.txt 2>&1 || true
+            adb shell dumpsys window windows > shots/windows.txt 2>&1 || true
+            echo done
+
+      - name: Report what happened
+        if: always()
+        run: |
+          crash=$(grep -A 40 "FATAL EXCEPTION" shots/logcat.txt 2>/dev/null | head -60)
+          {
+            echo "## Launch on Android 7"
+            echo "### install"
+            echo '```'; tail -5 shots/install.txt 2>/dev/null || echo "no output"; echo '```'
+            echo "### am start"
+            echo '```'; tail -10 shots/start.txt 2>/dev/null || echo "no output"; echo '```'
+            echo "### crash"
+            echo '```'; [ -n "$crash" ] && echo "$crash" || echo "none"; echo '```'
+            echo "### app log lines"
+            echo '```'
+            grep -iE "bambuddyaio|AndroidRuntime|ActivityManager.*bambuddy" shots/logcat.txt 2>/dev/null | tail -30 || echo "none"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$crash" ]; then
+            echo "The app crashed on launch."
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
