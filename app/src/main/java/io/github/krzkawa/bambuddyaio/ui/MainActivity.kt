@@ -168,6 +168,9 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
             val result = withContext(Dispatchers.IO) { BambuTag.read(tag, applicationContext) }
             ScanState.found(result)
             withContext(Dispatchers.Main) {
+                // The phone is face down against the spool, so the buzz is the
+                // only feedback that reaches him at the moment of the read.
+                ScanFeedback.buzz(applicationContext, result)
                 if (current != SCAN_TAB) showTab(SCAN_TAB)
             }
         }

@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- The phone is face down against a spool during a scan, so the only
+         feedback that reaches the user at that moment is one he can feel. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Not required: the dashboard is fully usable on a phone without NFC. -->
     <uses-feature android:name="android.hardware.nfc" android:required="false" />

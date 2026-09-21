@@ -95,41 +95,83 @@ object BambuTag {
 
     // ------------------------------------------------------------ Bambu tags
 
-    /** Returns null when this is not a Bambu tag or the read did not survive. */
+    /**
+     * Returns null when this is not a Bambu tag, so the caller can try OpenSpool next.
+     * A tag that was lost rather than refused comes back as a [ScanFailure.TAG_LOST]
+     * result, which is a different thing and says so.
+     *
+     * Twelve blocks across five sectors is a long time to hold a spool steady against an
+     * old phone's antenna, so a lost tag is read again in place before giving up. The
+     * user has not moved yet at that point, which is the moment a retry is most likely
+     * to work — and much better than asking him to start over.
+     */
     private fun readBambu(tag: Tag, uid: String): SpoolTag? {
-        val mfc = MifareClassic.get(tag) ?: return null
+        var attempts = 0
+        while (true) {
+            val pass = attemptBambu(tag, uid)
+            when (pass.outcome) {
+                ReadOutcome.DECODED -> return pass.tag
+                ReadOutcome.NOT_BAMBU -> return null
+                ReadOutcome.STALE -> return SpoolTag(
+                    tagUid = uid,
+                    source = SpoolTag.Source.PLAIN,
+                    warning = "Another tag arrived before this one had finished reading. Hold one " +
+                        "spool at a time against the phone and try again.",
+                    failure = ScanFailure.TAG_LOST
+                )
+                ReadOutcome.LOST -> {
+                    attempts++
+                    if (attempts >= READ_ATTEMPTS) {
+                        return SpoolTag(
+                            tagUid = uid,
+                            source = SpoolTag.Source.PLAIN,
+                            warning = "Lost contact with the tag part-way through, twice. Lay the " +
+                                "spool flat against the back of the phone and hold it there.",
+                            failure = ScanFailure.TAG_LOST
+                        )
+                    }
+                    settle()
+                }
+            }
+        }
+    }
+
+    /** One connect-read-close pass at the tag. */
+    private class Pass(val outcome: ReadOutcome, val tag: SpoolTag? = null)
+
+    private fun attemptBambu(tag: Tag, uid: String): Pass {
+        val mfc = MifareClassic.get(tag) ?: return Pass(ReadOutcome.NOT_BAMBU)
 
         return try {
             mfc.connect()
             mfc.timeout = TAG_TIMEOUT_MS
             val blocks = BambuSectors.read(MifareClassicSource(tag.id, mfc))
-            if (blocks.isEmpty()) null else BambuBlocks.parse(uid, blocks)
-        } catch (e: SectorLockedException) {
-            // Sector 0 refused the derived key, so this is not a genuine Bambu tag.
-            null
-        } catch (e: TagLostException) {
-            SpoolTag(
-                tagUid = uid,
-                source = SpoolTag.Source.PLAIN,
-                warning = "Lost contact with the tag part-way through. Hold the spool still against " +
-                    "the phone and try again.",
-                failure = ScanFailure.TAG_LOST
-            )
-        } catch (e: IOException) {
-            null
-        } catch (e: IllegalArgumentException) {
-            // An empty or nonsensical UID; nothing to derive keys from.
-            null
-        } catch (e: SecurityException) {
-            // The tag handle went stale, usually because another tag arrived first.
-            null
+            if (blocks.isEmpty()) Pass(ReadOutcome.NOT_BAMBU)
+            else Pass(ReadOutcome.DECODED, BambuBlocks.parse(uid, blocks))
+        } catch (e: Exception) {
+            // Anything the reader has no answer for is not a spool problem; let it out.
+            Pass(outcomeOf(e) ?: throw e)
         } finally {
             closeQuietly(mfc)
         }
     }
 
+    /** A moment for the field to settle before reading the tag again. */
+    private fun settle() {
+        try {
+            Thread.sleep(RETRY_PAUSE_MS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
     /** Milliseconds per Mifare transceive. The default is short for a fifteen-block read. */
     private const val TAG_TIMEOUT_MS = 2000
+
+    /** One retry. A second failure means the spool really has moved. */
+    private const val READ_ATTEMPTS = 2
+
+    private const val RETRY_PAUSE_MS = 40L
 
     /** Adapts [MifareClassic] to the platform-free [MifareSectorSource] the reader works against. */
     private class MifareClassicSource(

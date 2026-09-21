@@ -5,12 +5,16 @@ import android.nfc.NfcAdapter
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import androidx.appcompat.app.AlertDialog
+import androidx.lifecycle.lifecycleScope
 import io.github.krzkawa.bambuddyaio.net.Repo
 import io.github.krzkawa.bambuddyaio.nfc.BambuTag
 import io.github.krzkawa.bambuddyaio.nfc.ScanFailure
 import io.github.krzkawa.bambuddyaio.nfc.SpoolTag
 import io.github.krzkawa.bambuddyaio.util.objects
 import io.github.krzkawa.bambuddyaio.util.str
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /**
@@ -26,6 +30,7 @@ class ScanFragment : BaseFragment() {
     private var lookedUpFor: String? = null
     private var matched: JSONObject? = null
     private var lookupFailed: String? = null
+    private var hiccupTimer: Job? = null
 
     override fun build(ctx: Context) {
         content.addView(header(ctx, "Scan a spool", "Hold the spool's tag against the back of the phone"))
@@ -37,6 +42,18 @@ class ScanFragment : BaseFragment() {
             render()
         }
         observe(ScanState.busy) { render() }
+        observe(ScanState.hiccup) { failed ->
+            hiccupTimer?.cancel()
+            // The banner has done its job once he has seen it; leaving it up would
+            // sit on top of the scan it is there to protect.
+            if (failed != null) {
+                hiccupTimer = viewLifecycleOwner.lifecycleScope.launch {
+                    delay(HICCUP_MS)
+                    ScanState.dismissHiccup()
+                }
+            }
+            render()
+        }
         observe(Repo.selected) { render() }
         render()
     }
@@ -67,6 +84,10 @@ class ScanFragment : BaseFragment() {
             return
         }
 
+        ScanState.hiccup.value?.let { failed ->
+            body.addView(hiccupCard(ctx, failed, tag))
+            body.addView(Ui.space(ctx, 8))
+        }
         body.addView(tagCard(ctx, tag))
         body.addView(Ui.space(ctx, 8))
         body.addView(matchCard(ctx, tag))
@@ -77,6 +98,29 @@ class ScanFragment : BaseFragment() {
             matched = null
             render()
         })
+    }
+
+    /**
+     * A read that was turned away, shown over the scan it was turned away for.
+     *
+     * The spool is still near the phone while he reaches for a slot button, so it gets
+     * read again, often only halfway. That used to replace the slot buttons with an
+     * error and cost him the scan; now it says what happened and leaves the scan alone.
+     */
+    private fun hiccupCard(ctx: Context, failed: SpoolTag, held: SpoolTag): LinearLayout {
+        val card = Ui.card(ctx)
+        card.addView(Ui.title(ctx, "Kept the scan below"))
+        val line = Ui.body(ctx, failed.warning
+            ?: "The tag was read again and gave up less that time, so the fuller scan is still shown.")
+        line.setTextColor(Ui.warn(ctx))
+        card.addView(line)
+        if (failed.tagUid != held.tagUid) {
+            card.addView(Ui.tiny(ctx, "That was a different tag. Tap \"Scan another\" first if you " +
+                "meant to work with it."))
+        }
+        card.addView(Ui.space(ctx, 6))
+        card.addView(Ui.button(ctx, "Dismiss") { ScanState.dismissHiccup() })
+        return card
     }
 
     private fun nfcStateCard(ctx: Context): LinearLayout {
@@ -174,7 +218,7 @@ class ScanFragment : BaseFragment() {
             card.addView(Ui.dim(ctx, "Add it as a new spool, or point this tag at one you already have."))
             card.addView(Ui.space(ctx, 10))
             val row = Ui.row(ctx)
-            row.addView(Ui.button(ctx, "Add to inventory", primary = true) { createSpool(ctx, tag) })
+            row.addView(Ui.button(ctx, "Add to inventory", primary = true) { createSpool(tag) })
             row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
             row.addView(Ui.button(ctx, "Link to a spool") { linkExisting(ctx, tag) })
             card.addView(row, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -182,6 +226,13 @@ class ScanFragment : BaseFragment() {
         }
 
         card.addView(Ui.heading(ctx, "In your inventory"))
+        if (!spool.isNull("archived_at")) {
+            val archived = Ui.body(ctx, "This spool is archived in Bambuddy. It is still here, so " +
+                "there is no need to add it again.")
+            archived.setTextColor(Ui.warn(ctx))
+            card.addView(archived)
+            card.addView(Ui.space(ctx, 4))
+        }
         val line = Ui.row(ctx)
         line.addView(Ui.swatch(ctx, spool.str("rgba"), 22))
         line.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
@@ -242,21 +293,8 @@ class ScanFragment : BaseFragment() {
     }
 
     /** Creates an inventory entry straight from what the tag said. */
-    private fun createSpool(ctx: Context, tag: SpoolTag) {
-        val payload = JSONObject()
-            .put("material", (tag.material ?: "Unknown").take(50))
-            .put("label_weight", tag.filamentWeightG ?: 1000)
-            .put("data_origin", "nfc")
-            .put("tag_type", if (tag.source == SpoolTag.Source.BAMBU) "bambu" else "openspool")
-        tag.detailedType?.let { payload.put("subtype", it) }
-        tag.brand?.let { payload.put("brand", it) }
-        tag.rgba?.takeIf { it.length == 8 }?.let { payload.put("rgba", it) }
-        tag.nozzleTempMin?.let { payload.put("nozzle_temp_min", it) }
-        tag.nozzleTempMax?.let { payload.put("nozzle_temp_max", it) }
-        payload.put("tag_uid", tag.tagUid)
-        tag.trayUuid?.let { payload.put("tray_uuid", it) }
-
-        background({ Repo.api.createSpool(payload) }) { result ->
+    private fun createSpool(tag: SpoolTag) {
+        background({ Repo.api.createSpool(SpoolPayload.from(tag)) }) { result ->
             result.onSuccess {
                 matched = it
                 toast("Added to your inventory")
@@ -291,5 +329,10 @@ class ScanFragment : BaseFragment() {
                 .setNegativeButton("Cancel", null)
                 .show()
         }
+    }
+
+    companion object {
+        /** How long a turned-away read stays on screen before it clears itself. */
+        private const val HICCUP_MS = 8_000L
     }
 }
