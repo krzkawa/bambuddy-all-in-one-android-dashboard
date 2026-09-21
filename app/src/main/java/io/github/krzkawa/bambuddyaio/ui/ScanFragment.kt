@@ -6,6 +6,7 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import androidx.appcompat.app.AlertDialog
 import io.github.krzkawa.bambuddyaio.net.Repo
+import io.github.krzkawa.bambuddyaio.nfc.BambuTag
 import io.github.krzkawa.bambuddyaio.nfc.SpoolTag
 import io.github.krzkawa.bambuddyaio.util.objects
 import io.github.krzkawa.bambuddyaio.util.str
@@ -89,6 +90,10 @@ class ScanFragment : BaseFragment() {
                 card.addView(Ui.title(ctx, "NFC is switched off"))
                 card.addView(Ui.dim(ctx, "Turn it on in Android settings, then come back."))
             }
+            !BambuTag.phoneSupportsMifareClassic(ctx) -> {
+                card.addView(Ui.title(ctx, "Ready, but this phone cannot read Bambu tags"))
+                card.addView(Ui.dim(ctx, "Its NFC controller has no Mifare Classic support, which is what genuine Bambu spools use. OpenSpool tags still scan, and any tag can be linked to a spool by hand."))
+            }
             else -> {
                 card.addView(Ui.title(ctx, "Ready to scan"))
                 card.addView(Ui.dim(ctx, "Hold the spool so its tag touches the back of the phone. Bambu tags sit in the cardboard core, near the rim."))
@@ -102,6 +107,10 @@ class ScanFragment : BaseFragment() {
 
         val top = Ui.row(ctx)
         top.addView(Ui.swatch(ctx, tag.rgba, 34))
+        if (tag.isDualColor) {
+            top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 3, 1))
+            top.addView(Ui.swatch(ctx, tag.secondRgba, 34))
+        }
         top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 10, 1))
         val titles = Ui.col(ctx)
         titles.addView(Ui.big(ctx, tag.title))

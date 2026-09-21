@@ -25,7 +25,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build debug and release
-        run: ./gradlew assembleDebug assembleRelease --stacktrace
+        run: ./gradlew testDebugUnitTest assembleDebug assembleRelease --stacktrace
 
       - name: Name the APKs after the run
         run: |
@@ -89,18 +89,24 @@ jobs:
             adb exec-out screencap -p > shots/first-run.png || true
             adb logcat -d > shots/logcat.txt 2>&1 || true
             adb shell dumpsys window windows > shots/windows.txt 2>&1 || true
+            adb shell dumpsys activity activities > shots/activities.txt 2>&1 || true
             echo done
 
       - name: Report what happened
         if: always()
         run: |
           crash=$(grep -A 40 "FATAL EXCEPTION" shots/logcat.txt 2>/dev/null | head -60)
+          installed=no
+          grep -q "^Success" shots/install.txt 2>/dev/null && installed=yes
+          running=no
+          grep -q "io.github.krzkawa.bambuddyaio" shots/activities.txt 2>/dev/null && running=yes
           {
             echo "## Launch on Android 7"
             echo "### install"
             echo '```'; tail -5 shots/install.txt 2>/dev/null || echo "no output"; echo '```'
             echo "### am start"
             echo '```'; tail -10 shots/start.txt 2>/dev/null || echo "no output"; echo '```'
+            echo "installed: $installed, on screen: $running"
             echo "### crash"
             echo '```'; [ -n "$crash" ] && echo "$crash" || echo "none"; echo '```'
             echo "### app log lines"
@@ -110,6 +116,17 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           if [ -n "$crash" ]; then
             echo "The app crashed on launch."
+            exit 1
+          fi
+          # Without these two the job would pass on an APK that never installed.
+          if [ "$installed" != "yes" ]; then
+            echo "The APK did not install."
+            cat shots/install.txt 2>/dev/null
+            exit 1
+          fi
+          if [ "$running" != "yes" ]; then
+            echo "The app installed but is not on screen."
+            cat shots/start.txt 2>/dev/null
             exit 1
           fi
 
