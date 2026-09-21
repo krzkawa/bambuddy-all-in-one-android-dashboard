@@ -45,13 +45,19 @@ object BambuTag {
 
     /**
      * Reads whatever the tag will give up. Never throws for an unreadable tag — it
-     * returns a [SpoolTag] with a warning so the UI can still offer to link the UID to a
-     * spool by hand.
+     * returns a [SpoolTag] carrying a [SpoolTag.warning] and a [SpoolTag.failure] so the
+     * UI can still offer to link the UID to a spool by hand.
+     *
+     * Pass [context] when you have one. Without it, a tag that arrives without the Mifare
+     * Classic technology is ambiguous: the phone's NFC controller may not support Mifare
+     * Classic at all, or this may simply be some other kind of tag. With it, the two are
+     * told apart properly and the user gets the right advice.
      *
      * Blocking radio I/O; call it off the main thread, and expect the spool to stay
      * against the phone for the few hundred milliseconds it takes.
      */
-    fun read(tag: Tag): SpoolTag {
+    @JvmOverloads
+    fun read(tag: Tag, context: Context? = null): SpoolTag {
         val uid = uidHex(tag)
 
         if (supportsMifareClassic(tag)) {
@@ -62,21 +68,29 @@ object BambuTag {
                 tagUid = uid,
                 source = SpoolTag.Source.PLAIN,
                 warning = "This tag is not a Bambu Lab spool tag, or its keys do not match. " +
-                    "You can still link it to a spool by hand."
+                    "You can still link it to a spool by hand.",
+                failure = ScanFailure.AUTH_FAILED
             )
         }
 
         tryOpenSpool(tag, uid)?.let { return it }
 
-        return SpoolTag(tagUid = uid, source = SpoolTag.Source.PLAIN, warning = plainWarning(tag))
-    }
+        val unsupportedPhone = when (context) {
+            null -> tag.techList.contains(NfcA::class.java.name)
+            else -> !phoneSupportsMifareClassic(context)
+        }
 
-    /** What to tell the user about a tag that held nothing we could use. */
-    private fun plainWarning(tag: Tag): String = when {
-        tag.techList.contains(NfcA::class.java.name) ->
-            "This phone's NFC chip cannot read Mifare Classic, which is what Bambu spools use. " +
-                "You can still link this tag to a spool by hand."
-        else -> "Tag read, but it holds no filament data."
+        return SpoolTag(
+            tagUid = uid,
+            source = SpoolTag.Source.PLAIN,
+            warning = if (unsupportedPhone) {
+                "This phone's NFC chip cannot read Mifare Classic, which is what Bambu spools use. " +
+                    "You can still link this tag to a spool by hand."
+            } else {
+                "Tag read, but it holds no filament data."
+            },
+            failure = if (unsupportedPhone) ScanFailure.UNSUPPORTED_DEVICE else ScanFailure.NOT_MIFARE_CLASSIC
+        )
     }
 
     // ------------------------------------------------------------ Bambu tags
@@ -98,7 +112,8 @@ object BambuTag {
                 tagUid = uid,
                 source = SpoolTag.Source.PLAIN,
                 warning = "Lost contact with the tag part-way through. Hold the spool still against " +
-                    "the phone and try again."
+                    "the phone and try again.",
+                failure = ScanFailure.TAG_LOST
             )
         } catch (e: IOException) {
             null

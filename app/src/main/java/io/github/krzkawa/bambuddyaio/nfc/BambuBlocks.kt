@@ -14,9 +14,11 @@ package io.github.krzkawa.bambuddyaio.nfc
  * | 4 | detailed filament type, ASCII |
  * | 5 | colour RGBA (0..3), spool weight in g (4..5), diameter in mm as a float (8..11) |
  * | 6 | drying °C, drying hours, bed temp type, bed °C, hotend max °C, hotend min °C |
+ * | 8 | X Cam info (0..11), nozzle diameter in mm as a float (12..15) |
  * | 9 | tray UID, 16 bytes |
  * | 10 | spool width in mm×100 (4..5) |
  * | 12 | production date, ASCII `<year>_<month>_<day>_<hour>_<minute>` |
+ * | 13 | a shorter production date, format undocumented, kept as stored |
  * | 14 | filament length in metres (4..5) |
  * | 16 | colour format id, colour count, second colour as ABGR (4..7) |
  *
@@ -44,14 +46,18 @@ object BambuBlocks {
         val b4 = blocks.sized(4)
         val b5 = blocks.sized(5)
         val b6 = blocks.sized(6)
+        val b8 = blocks.sized(8)
         val b9 = blocks.sized(9)
         val b10 = blocks.sized(10)
         val b12 = blocks.sized(12)
+        val b13 = blocks.sized(13)
         val b14 = blocks.sized(14)
         val b16 = blocks.sized(16)
 
         val material = b2?.ascii(0, 16)
         val detailedType = b4?.ascii(0, 16)
+        // Nothing names the filament, so the tag is damaged rather than merely sparse.
+        val unreadable = material == null && detailedType == null
 
         // Block 16 is on newer tags only, and its format id says whether a second colour
         // is really there rather than leftover bytes.
@@ -81,12 +87,17 @@ object BambuBlocks {
             spoolWidthMm = b10?.u16(4)?.let { it / 100.0 }?.takeIf { it > 1.0 },
             producedAt = b12?.ascii(0, 16),
             lengthM = b14?.u16(4)?.takeIf { it in 1..100_000 },
-            warning = if (material == null && detailedType == null) {
+            // Tags commonly leave this zeroed, in which case it is absent rather than 0 mm.
+            nozzleDiameterMm = b8?.f32(12)?.toDouble()
+                ?.takeIf { it > 0.0 && it < MAX_DIAMETER_MM },
+            producedAtShort = b13?.ascii(0, 16),
+            warning = if (unreadable) {
                 "This tag unlocked as a Bambu spool, but its filament data is unreadable. " +
                     "You can still link it to a spool by hand."
             } else {
                 null
-            }
+            },
+            failure = if (unreadable) ScanFailure.MALFORMED else null
         )
     }
 
