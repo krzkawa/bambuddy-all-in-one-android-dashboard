@@ -7,3 +7,6 @@ build/
 captures/
 .externalNativeBuild/
 .cxx/
+
+# Kotlin Gradle plugin session directory, created by any local build.
+.kotlin/

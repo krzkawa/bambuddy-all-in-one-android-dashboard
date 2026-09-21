@@ -31,7 +31,10 @@ class BambuSectorsTest {
         assertEquals(330, spool.lengthM)
         assertEquals(66.25, spool.spoolWidthMm!!, 0.0001)
         assertEquals("2024_10_05_14_32", spool.producedAt)
+        assertEquals("24_10_05", spool.producedAtShort)
+        assertEquals(0.4, spool.nozzleDiameterMm!!, 0.0001)
         assertNull(spool.warning)
+        assertNull(spool.failure)
     }
 
     @Test
@@ -65,6 +68,7 @@ class BambuSectorsTest {
 
         assertNull(spool.spoolWidthMm)
         assertNull(spool.lengthM)
+        assertNull(spool.nozzleDiameterMm)
     }
 
     @Test
@@ -115,7 +119,7 @@ class BambuSectorsTest {
         // Sectors 0-4 cover blocks 0-16; the RSA signature in sectors 10-15 is left alone,
         // which is several seconds of radio time saved with the spool held to the phone.
         assertEquals(listOf(0, 1, 2, 3, 4), source.attemptedSectors)
-        assertEquals(listOf(1, 2, 4, 5, 6, 9, 10, 12, 14, 16), source.readBlocks)
+        assertEquals(listOf(1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16), source.readBlocks)
         // Never a key trailer, and nothing from the signature sectors.
         assertTrue(source.readBlocks.none { it % BambuSectors.BLOCKS_PER_SECTOR == 3 })
     }
@@ -144,6 +148,7 @@ class BambuSectorsTest {
         assertNull(spool.detailedType)
         assertEquals("Unknown filament", spool.title)
         assertNotNull(spool.warning)
+        assertEquals(ScanFailure.MALFORMED, spool.failure)
         // The UID still came through, so the spool can be linked by hand.
         assertEquals("DEADBEEF", spool.tagUid)
     }

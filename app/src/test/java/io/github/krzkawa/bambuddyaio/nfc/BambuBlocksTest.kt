@@ -110,6 +110,21 @@ class BambuBlocksTest {
     }
 
     @Test
+    fun `a damaged tag carries a failure code as well as a warning`() {
+        val damaged = parseWith { remove(2); remove(4) }
+
+        assertEquals(ScanFailure.MALFORMED, damaged.failure)
+        // A tag that is merely sparse is not a failure.
+        assertNull(parseWith { remove(12); remove(14) }.failure)
+    }
+
+    @Test
+    fun `a zeroed nozzle diameter is absent rather than zero`() {
+        assertNull(parseWith { put(8, ByteArray(16)) }.nozzleDiameterMm)
+        assertEquals(0.4, parseWith { }.nozzleDiameterMm!!, 0.0001)
+    }
+
+    @Test
     fun `two scans of the same spool compare equal`() {
         assertEquals(BambuBlocks.parse(uid, blocks()), BambuBlocks.parse(uid, blocks()))
     }

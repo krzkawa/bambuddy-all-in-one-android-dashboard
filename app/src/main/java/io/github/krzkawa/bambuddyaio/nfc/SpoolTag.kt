@@ -29,8 +29,14 @@ data class SpoolTag(
     val producedAt: String? = null,
     val lengthM: Int? = null,
     val spoolWidthMm: Double? = null,
+    /** Nozzle diameter in mm as written on the tag, or null when it is left zeroed. */
+    val nozzleDiameterMm: Double? = null,
+    /** Block 13's short production date, kept as stored; its format is not documented. */
+    val producedAtShort: String? = null,
     /** Set when the tag was found but could not be decoded, e.g. an unreadable sector. */
-    val warning: String? = null
+    val warning: String? = null,
+    /** The same trouble as [warning], in a form the UI can branch on. Null on a clean read. */
+    val failure: ScanFailure? = null
 ) {
     enum class Source { BAMBU, OPENSPOOL, PLAIN }
 

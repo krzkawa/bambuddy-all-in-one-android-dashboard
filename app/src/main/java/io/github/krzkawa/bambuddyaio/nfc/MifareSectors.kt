@@ -60,7 +60,7 @@ object BambuSectors {
      * the phone, and the rest of a Bambu tag is either a key trailer, an RSA signature or
      * empty.
      */
-    val DATA_BLOCKS = listOf(1, 2, 4, 5, 6, 9, 10, 12, 14, 16)
+    val DATA_BLOCKS = listOf(1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16)
 
     /**
      * Authenticates and reads the data sectors of [source].
