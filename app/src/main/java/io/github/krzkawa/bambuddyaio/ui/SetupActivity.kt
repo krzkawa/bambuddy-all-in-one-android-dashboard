@@ -3,6 +3,7 @@ package io.github.krzkawa.bambuddyaio.ui
 import android.content.Intent
 import android.os.Bundle
 import android.text.InputType
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.EditText
@@ -16,6 +17,11 @@ import io.github.krzkawa.bambuddyaio.net.Repo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 /**
  * First-run screen: where the Bambuddy server is, and how to authenticate.
@@ -31,6 +37,10 @@ class SetupActivity : AppCompatActivity() {
     private lateinit var userField: EditText
     private lateinit var passField: EditText
     private lateinit var message: TextView
+    private lateinit var authNote: TextView
+
+    /** The address the note on screen is about, so a re-check is skipped. */
+    private var probed = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,6 +65,12 @@ class SetupActivity : AppCompatActivity() {
         serverField = Ui.input(this, "http://192.168.1.50:8000", Repo.prefs.serverUrl)
         serverField.inputType = InputType.TYPE_TEXT_VARIATION_URI
         left.addView(serverField, wide())
+        authNote = Ui.dim(this, "")
+        authNote.visibility = View.GONE
+        left.addView(authNote, wide())
+        // Asking the server what it wants beats making him guess. Checked when
+        // he leaves the address box, which is the moment he has finished it.
+        serverField.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) checkWhatServerWants() }
         left.addView(Ui.space(this, 10))
         left.addView(Ui.heading(this, "API key"))
         left.addView(Ui.dim(this, "Settings > API Keys on the server. Needs read, control and inventory."))
@@ -87,6 +103,10 @@ class SetupActivity : AppCompatActivity() {
         root.addView(actions)
 
         setContentView(Ui.scroll(this, root))
+
+        // A saved address means he is here to change something, so say what
+        // that server wants without waiting for him to retype it.
+        if (Repo.prefs.serverUrl.isNotBlank()) checkWhatServerWants()
     }
 
     private fun wide(): LinearLayout.LayoutParams =
@@ -133,8 +153,72 @@ class SetupActivity : AppCompatActivity() {
         }
     }
 
+    // ----------------------------------------------------- what this server wants
+
+    /**
+     * `GET /auth/status` is public and answers the one thing the two boxes
+     * below cannot: whether this install asks for a login at all.
+     */
+    private fun checkWhatServerWants() {
+        val server = serverField.text.toString().trim().trimEnd('/')
+        if (server.isBlank() || server == probed) return
+        probed = server
+        authNote.visibility = View.VISIBLE
+        authNote.setTextColor(Ui.dimColor(this))
+        authNote.text = "Asking the server what it needs…"
+
+        lifecycleScope.launch {
+            val status = withContext(Dispatchers.IO) { authStatus(server) }
+            // He may have carried on typing while that was in flight.
+            if (server != probed) return@launch
+            when {
+                status == null -> {
+                    // Could be the wrong address, could be an older Bambuddy.
+                    // Either way Connect is the honest test, so say nothing.
+                    authNote.visibility = View.GONE
+                    probed = ""
+                }
+                status.optBoolean("requires_setup") -> {
+                    authNote.setTextColor(Ui.bad(this@SetupActivity))
+                    authNote.text = "This Bambuddy has not been set up yet. " +
+                        "Open it in a browser and finish setup first."
+                }
+                status.optBoolean("auth_enabled", true) ->
+                    authNote.text = "This server asks for a login. An API key is the one to use — " +
+                        "it never expires, while an account login stops working after a day."
+                else ->
+                    authNote.text = "This server has authentication switched off. " +
+                        "Leave the API key and the account login blank."
+            }
+        }
+    }
+
+    /**
+     * Done with a bare request rather than through [Api], because [Api] reads
+     * the saved server address and nothing is saved until Connect works.
+     */
+    private fun authStatus(server: String): JSONObject? {
+        val root = if (server.startsWith("http")) server else "http://$server"
+        val url = ("$root/api/v1/auth/status").toHttpUrlOrNull() ?: return null
+        return try {
+            probeClient.newCall(Request.Builder().url(url).header("Accept", "application/json").build())
+                .execute()
+                .use { if (it.isSuccessful) JSONObject(it.body?.string().orEmpty()) else null }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun say(text: String, error: Boolean) {
         message.text = text
         message.setTextColor(if (error) Ui.bad(this) else Ui.dimColor(this))
+    }
+
+    private companion object {
+        /** Short timeouts: this is a hint while he types, not a real request. */
+        val probeClient: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .build()
     }
 }
