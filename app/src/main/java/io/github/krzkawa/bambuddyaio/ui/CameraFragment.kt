@@ -26,17 +26,13 @@ class CameraFragment : BaseFragment() {
     private var fullscreen: Dialog? = null
 
     override fun build(ctx: Context) {
-        val head = Ui.row(ctx)
-        head.addView(Ui.big(ctx, "Camera"))
-        head.addView(Ui.space(ctx, 1), Ui.lp(ctx, 0, 1, 1f))
-        head.addView(Ui.button(ctx, "Reconnect") { openStream(force = true) })
-        content.addView(head, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        content.addView(Ui.space(ctx, 8))
+        screenAction("Reconnect") { openStream(force = true) }
 
         picker = Ui.col(ctx)
-        content.addView(picker, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        content.addView(picker, Ui.wide(ctx))
 
-        note = Ui.dim(ctx, "")
+        note = Ui.tiny(ctx, "")
+        note.setPadding(0, 0, 0, Ui.dp(ctx, Ui.S))
         content.addView(note)
 
         holder = Ui.col(ctx)
@@ -81,7 +77,7 @@ class CameraFragment : BaseFragment() {
             Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         )
         view = player
-        note.text = "Connecting to the camera…"
+        note.text = "Connecting…"
 
         // The stream route takes a token in the URL rather than a header, so
         // one has to be minted before the first frame can arrive.

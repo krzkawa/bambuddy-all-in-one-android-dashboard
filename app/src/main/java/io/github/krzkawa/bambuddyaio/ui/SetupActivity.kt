@@ -53,32 +53,33 @@ class SetupActivity : AppCompatActivity() {
         root.setPadding(pad, pad, pad, pad)
 
         root.addView(Ui.big(this, "Connect to Bambuddy"))
-        root.addView(Ui.dim(this, "The address of your own Bambuddy server, on your network."))
-        root.addView(Ui.space(this, 12))
+        root.addView(Ui.dim(this, "Your own server, on your own network."))
+        root.addView(Ui.space(this, Ui.XL))
 
         val columns = Ui.row(this)
         columns.gravity = android.view.Gravity.TOP
 
         // Left: server address and API key.
-        val left = Ui.col(this)
+        val left = Ui.card(this)
         left.addView(Ui.heading(this, "Server address"))
         serverField = Ui.input(this, "http://192.168.1.50:8000", Repo.prefs.serverUrl)
         serverField.inputType = InputType.TYPE_TEXT_VARIATION_URI
         left.addView(serverField, wide())
-        authNote = Ui.dim(this, "")
+        authNote = Ui.tiny(this, "")
         authNote.visibility = View.GONE
         left.addView(authNote, wide())
         // Asking the server what it wants beats making him guess. Checked when
         // he leaves the address box, which is the moment he has finished it.
         serverField.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) checkWhatServerWants() }
-        left.addView(Ui.space(this, 10))
+        left.addView(Ui.space(this, Ui.L))
         left.addView(Ui.heading(this, "API key"))
-        left.addView(Ui.dim(this, "Settings > API Keys on the server. Needs read, control and inventory."))
+        left.addView(Ui.tiny(this, "Settings > API Keys on the server. Needs read, control and inventory."))
+        left.addView(Ui.space(this, 6))
         keyField = Ui.input(this, "bb_…", Repo.prefs.apiKey)
         left.addView(keyField, wide())
 
         // Right: account login.
-        val right = Ui.col(this)
+        val right = Ui.card(this)
         right.addView(Ui.heading(this, "Or sign in with your account"))
         userField = Ui.input(this, "Username or email", Repo.prefs.username)
         right.addView(userField, wide())
@@ -86,20 +87,21 @@ class SetupActivity : AppCompatActivity() {
         passField = Ui.input(this, "Password")
         passField.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         right.addView(passField, wide())
+        right.addView(Ui.space(this, Ui.S))
+        right.addView(Ui.tiny(this, "An account login runs out after a day and asks for the password again. " +
+            "An API key never expires, which is what a phone left by a printer wants."))
         right.addView(Ui.space(this, 6))
-        right.addView(Ui.dim(this, "An account login runs out after 24 hours and asks for your password again. An API key does not expire, so it is the better one for a phone left next to a printer."))
-        right.addView(Ui.space(this, 6))
-        right.addView(Ui.dim(this, "Leave both sides blank if your server has authentication turned off."))
+        right.addView(Ui.tiny(this, "Leave both blank if your server has authentication turned off."))
 
         columns.addView(left, Ui.lp(this, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        columns.addView(Ui.space(this, 1), Ui.lp(this, 16, 1))
+        columns.addView(Ui.space(this, 1), Ui.lp(this, Ui.M, 1))
         columns.addView(right, Ui.lp(this, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(columns, Ui.lp(this, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        root.addView(Ui.space(this, 14))
+        root.addView(Ui.space(this, Ui.L))
         val actions = Ui.row(this)
         actions.addView(Ui.button(this, "Connect", primary = true) { connect() })
-        actions.addView(Ui.space(this, 1), Ui.lp(this, 10, 1))
+        Ui.gap(this, actions, Ui.M)
         message = Ui.body(this, "")
         actions.addView(message)
         root.addView(actions)

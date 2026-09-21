@@ -32,9 +32,8 @@ class ScanFragment : BaseFragment() {
     private var hiccupTimer: Job? = null
 
     override fun build(ctx: Context) {
-        content.addView(header(ctx, "Scan a spool", "Hold the spool's tag against the back of the phone"))
         body = Ui.col(ctx)
-        content.addView(body, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        content.addView(body, Ui.wide(ctx))
 
         observe(ScanState.tag) { tag ->
             if (tag != null && tag.tagUid != lookedUpFor) lookUp(tag)
@@ -74,8 +73,10 @@ class ScanFragment : BaseFragment() {
 
         val tag = ScanState.tag.value
         if (ScanState.busy.value) {
-            body.addView(Ui.title(ctx, "Reading the tag…"))
-            body.addView(Ui.dim(ctx, "Hold it still for a moment."))
+            val card = Ui.card(ctx)
+            card.addView(Ui.big(ctx, "Reading the tag"))
+            card.addView(Ui.dim(ctx, "Hold it still for a moment."))
+            body.addView(card, Ui.wide(ctx))
             return
         }
         if (tag == null) {
@@ -88,10 +89,10 @@ class ScanFragment : BaseFragment() {
             body.addView(Ui.space(ctx, 8))
         }
         body.addView(tagCard(ctx, tag))
-        body.addView(Ui.space(ctx, 8))
+        body.addView(Ui.space(ctx, Ui.M))
         body.addView(matchCard(ctx, tag))
-        body.addView(Ui.space(ctx, 8))
-        body.addView(Ui.button(ctx, "Scan another") {
+        body.addView(Ui.space(ctx, Ui.M))
+        body.addView(Ui.quiet(ctx, "Scan another") {
             ScanState.clear()
             lookedUpFor = null
             matched = null
@@ -125,24 +126,36 @@ class ScanFragment : BaseFragment() {
     private fun nfcStateCard(ctx: Context): LinearLayout {
         val card = Ui.card(ctx)
         val adapter = NfcAdapter.getDefaultAdapter(ctx)
-        when {
-            adapter == null -> {
-                card.addView(Ui.title(ctx, "This phone has no NFC"))
-                card.addView(Ui.dim(ctx, "Everything else in the app still works. Spools can be assigned by hand from the AMS screen."))
-            }
-            !adapter.isEnabled -> {
-                card.addView(Ui.title(ctx, "NFC is switched off"))
-                card.addView(Ui.dim(ctx, "Turn it on in Android settings, then come back."))
-            }
-            !BambuTag.phoneSupportsMifareClassic(ctx) -> {
-                card.addView(Ui.title(ctx, "Ready, but this phone cannot read Bambu tags"))
-                card.addView(Ui.dim(ctx, "Its NFC controller has no Mifare Classic support, which is what genuine Bambu spools use. OpenSpool tags still scan, and any tag can be linked to a spool by hand."))
-            }
-            else -> {
-                card.addView(Ui.title(ctx, "Ready to scan"))
-                card.addView(Ui.dim(ctx, "Hold the spool so its tag touches the back of the phone. Bambu tags sit in the cardboard core, near the rim."))
-            }
+        val (headline, detail, colour) = when {
+            adapter == null -> Triple(
+                "This phone has no NFC",
+                "Spools can still be assigned by hand from the AMS screen.",
+                Ui.warn(ctx)
+            )
+            !adapter.isEnabled -> Triple(
+                "NFC is switched off",
+                "Turn it on in Android settings, then come back.",
+                Ui.warn(ctx)
+            )
+            !BambuTag.phoneSupportsMifareClassic(ctx) -> Triple(
+                "This phone cannot read Bambu tags",
+                "Its NFC chip has no Mifare Classic support. OpenSpool tags still scan, " +
+                    "and any tag can be linked to a spool by hand.",
+                Ui.warn(ctx)
+            )
+            else -> Triple(
+                "Hold a spool against the back of the phone",
+                "Bambu tags sit in the cardboard core, near the rim.",
+                Ui.good(ctx)
+            )
         }
+        val top = Ui.row(ctx)
+        top.addView(Ui.dot(ctx, colour, 9))
+        Ui.gap(ctx, top, 10)
+        top.addView(Ui.big(ctx, headline))
+        card.addView(top, Ui.wide(ctx))
+        card.addView(Ui.space(ctx, Ui.XS))
+        card.addView(Ui.dim(ctx, detail))
         return card
     }
 
@@ -155,12 +168,12 @@ class ScanFragment : BaseFragment() {
             top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 3, 1))
             top.addView(Ui.swatch(ctx, tag.secondRgba, 34))
         }
-        top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 10, 1))
+        Ui.gap(ctx, top, Ui.M)
         val titles = Ui.col(ctx)
         titles.addView(Ui.big(ctx, tag.title))
         titles.addView(Ui.dim(ctx, tag.label))
         top.addView(titles)
-        card.addView(top, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        card.addView(top, Ui.wide(ctx))
 
         if (tag.warning != null) {
             card.addView(Ui.space(ctx, 6))
@@ -178,12 +191,12 @@ class ScanFragment : BaseFragment() {
             }
         }
 
-        card.addView(Ui.space(ctx, 10))
+        card.addView(Ui.space(ctx, Ui.M))
         val facts = Ui.row(ctx)
         fun fact(label: String, value: String?) {
             if (value == null) return
             facts.addView(Ui.stat(ctx, label, value))
-            facts.addView(Ui.space(ctx, 1), Ui.lp(ctx, 14, 1))
+            Ui.gap(ctx, facts, Ui.XL)
         }
         fact("Brand", tag.brand)
         fact("Weight", tag.filamentWeightG?.let { "$it g" })
@@ -192,9 +205,9 @@ class ScanFragment : BaseFragment() {
         fact("Bed", tag.bedTemp?.let { "$it°" })
         fact("Dry", tag.dryingTemp?.let { t -> tag.dryingHours?.let { "$t° / ${it}h" } ?: "$t°" })
         fact("Diameter", tag.diameterMm?.let { String.format("%.2f mm", it) })
-        card.addView(facts, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        card.addView(facts, Ui.wide(ctx))
 
-        card.addView(Ui.space(ctx, 8))
+        card.addView(Ui.space(ctx, Ui.M))
         card.addView(Ui.tiny(ctx, "UID ${tag.tagUid}" + (tag.trayUuid?.let { "  ·  tray $it" } ?: "")))
         return card
     }
@@ -214,13 +227,13 @@ class ScanFragment : BaseFragment() {
 
         if (spool == null) {
             card.addView(Ui.title(ctx, "Not in your inventory yet"))
-            card.addView(Ui.dim(ctx, "Add it as a new spool, or point this tag at one you already have."))
-            card.addView(Ui.space(ctx, 10))
+            card.addView(Ui.dim(ctx, "Add it, or point this tag at a spool you already have."))
+            card.addView(Ui.space(ctx, Ui.M))
             val row = Ui.row(ctx)
             row.addView(Ui.button(ctx, "Add to inventory", primary = true) { createSpool(tag) })
-            row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
+            Ui.gap(ctx, row, Ui.S)
             row.addView(Ui.button(ctx, "Link to a spool") { linkExisting(tag) })
-            card.addView(row, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            card.addView(row, Ui.wide(ctx))
             return card
         }
 
@@ -241,18 +254,19 @@ class ScanFragment : BaseFragment() {
         line.addView(details)
         card.addView(line, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        card.addView(Ui.space(ctx, 10))
+        card.addView(Ui.space(ctx, Ui.M))
         if (printerId < 0) {
             card.addView(Ui.dim(ctx, "Choose a printer on the Printers screen first."))
             return card
         }
 
-        card.addView(Ui.heading(ctx, "Assign to a slot on ${Repo.printerName(printerId)}"))
-        card.addView(Ui.space(ctx, 6))
+        card.addView(Ui.divider(ctx))
+        card.addView(Ui.space(ctx, Ui.M))
+        card.addView(Ui.heading(ctx, "Put it in a slot on ${Repo.printerName(printerId)}"))
 
         val slots = Assign.slotsFor(printerId)
         if (slots.isEmpty()) {
-            card.addView(Ui.dim(ctx, "That printer is not reporting any AMS slots right now."))
+            card.addView(Ui.dim(ctx, "That printer is not reporting any AMS slots."))
             return card
         }
 
@@ -261,7 +275,7 @@ class ScanFragment : BaseFragment() {
         var row = Ui.row(ctx)
         slots.forEachIndexed { index, slot ->
             if (index > 0 && index % 4 == 0) {
-                card.addView(row, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                card.addView(row, Ui.wide(ctx))
                 card.addView(Ui.space(ctx, 6))
                 row = Ui.row(ctx)
             }
@@ -269,9 +283,9 @@ class ScanFragment : BaseFragment() {
             row.addView(Ui.button(ctx, label) {
                 confirmAssign(ctx, spool, printerId, slot)
             })
-            row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 6, 1))
+            Ui.gap(ctx, row, 6)
         }
-        card.addView(row, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        card.addView(row, Ui.wide(ctx))
         return card
     }
 

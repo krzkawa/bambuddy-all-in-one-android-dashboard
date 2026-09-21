@@ -24,7 +24,7 @@ class SpoolsFragment : BaseFragment() {
     private var showArchived = false
 
     override fun build(ctx: Context) {
-        content.addView(header(ctx, "Spools"))
+        screenAction("Reload") { load() }
 
         val top = Ui.row(ctx)
         val search = Ui.input(ctx, "Search by material, colour or brand")
@@ -39,19 +39,17 @@ class SpoolsFragment : BaseFragment() {
         })
         top.addView(search, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
-        archivedToggle = Ui.button(ctx, archivedLabel()) {
+        archivedToggle = Ui.button(ctx, archivedLabel(), primary = showArchived) {
             showArchived = !showArchived
             archivedToggle.text = archivedLabel()
             load()
         }
         top.addView(archivedToggle)
-        top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 6, 1))
-        top.addView(Ui.button(ctx, "Reload") { load() })
-        content.addView(top, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        content.addView(Ui.space(ctx, 10))
+        content.addView(top, Ui.wide(ctx))
+        content.addView(Ui.space(ctx, Ui.M))
 
         list = Ui.col(ctx)
-        content.addView(list, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        content.addView(list, Ui.wide(ctx))
         load()
     }
 
@@ -78,24 +76,31 @@ class SpoolsFragment : BaseFragment() {
         val shown = spools.filter { Spools.matches(it, filter) }
 
         if (shown.isEmpty()) {
-            list.addView(Ui.dim(ctx, if (spools.isEmpty()) "No spools yet." else "Nothing matches that."))
+            list.addView(empty(ctx, if (spools.isEmpty()) "No spools yet." else "Nothing matches that."))
             return
         }
 
-        list.addView(Ui.dim(ctx, "${shown.size} of ${spools.size} spools"))
-        list.addView(Ui.space(ctx, 8))
+        val count = Ui.tiny(ctx, if (shown.size == spools.size) "${spools.size} spools"
+            else "${shown.size} of ${spools.size} spools")
+        list.addView(count)
+        list.addView(Ui.space(ctx, Ui.S))
 
         for (spool in shown) {
-            list.addView(row(ctx, spool))
+            list.addView(row(ctx, spool), Ui.wide(ctx))
             list.addView(Ui.space(ctx, 6))
         }
     }
 
     private fun row(ctx: Context, spool: JSONObject): LinearLayout {
-        val card = Ui.card(ctx)
+        // A spool is a list row, not a panel: forty panels down a screen is
+        // forty boxes and no list.
+        val card = Ui.inset(ctx)
+        card.background = Ui.pressable(
+            ctx, Ui.rounded(Ui.cardColor(ctx), 10, ctx), Ui.color(ctx, io.github.krzkawa.bambuddyaio.R.color.pressed), 10
+        )
         val line = Ui.row(ctx)
-        line.addView(Ui.swatch(ctx, spool.str("rgba"), 26))
-        line.addView(Ui.space(ctx, 1), Ui.lp(ctx, 10, 1))
+        line.addView(Ui.swatch(ctx, spool.str("rgba"), 24))
+        Ui.gap(ctx, line, Ui.M)
 
         val info = Ui.col(ctx)
         info.addView(Ui.body(ctx, Assign.spoolName(spool)))
@@ -103,11 +108,11 @@ class SpoolsFragment : BaseFragment() {
         line.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         if (Spools.isArchived(spool)) {
-            line.addView(Ui.button(ctx, "Restore") { restore(spool) })
+            line.addView(Ui.quiet(ctx, "Restore") { restore(spool) })
         } else {
             line.addView(Ui.button(ctx, "Assign") { assign(ctx, spool) })
         }
-        card.addView(line, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        card.addView(line, Ui.wide(ctx))
         // Tapping the card opens the spool. A separate edit button would cost
         // width this screen has none of, and the card is a far bigger target on
         // a phone this old; the button inside it still takes its own taps.
@@ -240,11 +245,8 @@ class SpoolsFragment : BaseFragment() {
     private fun labelled(ctx: Context, label: String, field: View): LinearLayout {
         val col = Ui.col(ctx)
         col.addView(Ui.heading(ctx, label))
-        col.addView(
-            field,
-            Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        )
-        col.addView(Ui.space(ctx, 8))
+        col.addView(field, Ui.wide(ctx))
+        col.addView(Ui.space(ctx, Ui.M))
         return col
     }
 

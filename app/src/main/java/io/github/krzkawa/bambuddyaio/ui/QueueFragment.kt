@@ -18,27 +18,21 @@ class QueueFragment : BaseFragment() {
     private lateinit var list: LinearLayout
 
     override fun build(ctx: Context) {
-        val head = Ui.row(ctx)
-        head.addView(Ui.big(ctx, "Queue"))
-        head.addView(Ui.space(ctx, 1), Ui.lp(ctx, 0, 1, 1f))
-        head.addView(Ui.button(ctx, "Reload") { load() })
-        content.addView(head, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        content.addView(Ui.space(ctx, 10))
-
+        screenAction("Reload") { load() }
         list = Ui.col(ctx)
-        content.addView(list, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        content.addView(list, Ui.wide(ctx))
         load()
     }
 
     private fun load() {
         val ctx = context ?: return
         list.removeAllViews()
-        list.addView(Ui.dim(ctx, "Loading…"))
+        list.addView(empty(ctx, "Loading…"))
         background({ Repo.api.queue() }) { result ->
             result.onSuccess { render(it.objects()) }
             result.onFailure {
                 list.removeAllViews()
-                list.addView(Ui.dim(ctx, it.message ?: "Could not load the queue"))
+                list.addView(empty(ctx, it.message ?: "Could not load the queue"))
             }
         }
     }
@@ -47,17 +41,18 @@ class QueueFragment : BaseFragment() {
         val ctx = context ?: return
         list.removeAllViews()
         if (items.isEmpty()) {
-            list.addView(Ui.dim(ctx, "Nothing queued."))
+            list.addView(empty(ctx, "Nothing queued."))
             return
         }
         for (item in items) {
-            list.addView(row(ctx, item))
+            list.addView(row(ctx, item), Ui.wide(ctx))
             list.addView(Ui.space(ctx, 6))
         }
     }
 
     private fun row(ctx: Context, item: JSONObject): LinearLayout {
-        val card = Ui.card(ctx)
+        val card = Ui.inset(ctx)
+        card.background = Ui.rounded(Ui.cardColor(ctx), 10, ctx)
         val line = Ui.row(ctx)
 
         val info = Ui.col(ctx)
@@ -72,15 +67,7 @@ class QueueFragment : BaseFragment() {
         Queue.waitingReason(item)?.let { info.addView(Ui.tiny(ctx, it)) }
         line.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        // Only a pending item can be started; the route answers 400 for
-        // anything else, so an item already printing gets no button at all
-        // rather than one that always fails.
-        if (Queue.canStart(item)) {
-            line.addView(Ui.button(ctx, "Start", primary = true) { confirmStart(ctx, item, name) })
-            line.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
-        }
-
-        line.addView(Ui.button(ctx, "Remove") {
+        line.addView(Ui.quiet(ctx, "Remove") {
             AlertDialog.Builder(ctx)
                 .setTitle("Remove from the queue?")
                 .setMessage(name)
@@ -93,7 +80,15 @@ class QueueFragment : BaseFragment() {
                 .setNegativeButton("Keep", null)
                 .show()
         })
-        card.addView(line, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // Only a pending item can be started; the route answers 400 for
+        // anything else, so an item already printing gets no button at all
+        // rather than one that always fails.
+        if (Queue.canStart(item)) {
+            Ui.gap(ctx, line, Ui.XS)
+            line.addView(Ui.button(ctx, "Start", primary = true) { confirmStart(ctx, item, name) })
+        }
+        card.addView(line, Ui.wide(ctx))
         return card
     }
 

@@ -55,6 +55,19 @@ android {
     lint {
         abortOnError = false
     }
+
+    // `./gradlew :app:testDebugUnitTest -Pshots --tests "*Shots*"` draws every
+    // screen to a PNG in build/shots, using the real views and the real fonts.
+    // It is the only way to see a change to the way the app looks without an
+    // Android phone in your hand, and it is off by default so that neither
+    // Robolectric nor its android-all download is anywhere near the build that
+    // publishes the APK.
+    if (project.hasProperty("shots")) {
+        sourceSets.getByName("test").java.srcDir("src/shots/java")
+        testOptions {
+            unitTests.isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -73,4 +86,7 @@ dependencies {
     // The android.jar the unit tests run against stubs org.json out; this puts a real
     // implementation on the test classpath so the OpenSpool parsing can be tested.
     testImplementation("org.json:json:20231013")
+    if (project.hasProperty("shots")) {
+        testImplementation("org.robolectric:robolectric:4.14.1")
+    }
 }

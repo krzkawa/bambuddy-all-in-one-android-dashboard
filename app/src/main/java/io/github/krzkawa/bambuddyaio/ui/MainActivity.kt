@@ -39,23 +39,34 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
 
     private data class Tab(val label: String, val make: () -> Fragment)
 
+    /**
+     * Ten tabs is a lot to scan. They are ordered the way the work goes — the
+     * machine, then the filament, then the jobs — and ruled off in those three
+     * groups so the eye can jump to a group instead of reading all ten.
+     */
     private val tabs = listOf(
         Tab("Printers") { DashboardFragment() },
         Tab("Control") { ControlFragment() },
+        Tab("Camera") { CameraFragment() },
         Tab("AMS") { AmsFragment() },
         Tab("Scan") { ScanFragment() },
         Tab("Spools") { SpoolsFragment() },
         Tab("Queue") { QueueFragment() },
         Tab("History") { HistoryFragment() },
         Tab("Stats") { StatsFragment() },
-        Tab("Camera") { CameraFragment() },
         Tab("Settings") { SettingsFragment() }
     )
 
-    private val railButtons = ArrayList<TextView>()
+    /** The last tab of each group; a hairline goes under it. */
+    private val groupEnds = setOf(2, 5, 8)
+
+    private val railButtons = ArrayList<LinearLayout>()
     private var current = -1
     private var nfc: NfcAdapter? = null
     private lateinit var statusLine: TextView
+    private lateinit var statusStrip: LinearLayout
+    private lateinit var screenTitle: TextView
+    private lateinit var screenAction: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -109,8 +120,8 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
 
         statusLine.text = message
         statusLine.setTextColor(colour)
-        statusLine.visibility = if (message.isBlank()) View.GONE else View.VISIBLE
-        statusLine.isClickable = Repo.authExpired.value
+        statusStrip.visibility = if (message.isBlank()) View.GONE else View.VISIBLE
+        statusStrip.isClickable = Repo.authExpired.value
     }
 
     /**
@@ -275,12 +286,8 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
         root.addView(buildRail(), Ui.lp(this, RAIL_WIDTH_DP, ViewGroup.LayoutParams.MATCH_PARENT))
 
         val right = Ui.col(this)
-        statusLine = Ui.tiny(this, "")
-        statusLine.setTextColor(Ui.bad(this))
-        statusLine.setPadding(Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 12), 0)
-        statusLine.visibility = View.GONE
-        statusLine.setOnClickListener { if (Repo.authExpired.value) askSignIn() }
-        right.addView(statusLine, Ui.lp(this, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        right.addView(buildTopBar(), Ui.wide(this))
+        right.addView(Ui.divider(this))
 
         val frame = FrameLayout(this)
         frame.id = R.id.content_frame
@@ -290,24 +297,103 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
         return root
     }
 
+    /**
+     * One bar across the top of every screen: where you are on the left, the
+     * screen's own action on the right.
+     *
+     * Each screen used to print its own name in large type, a hand's width from
+     * the highlighted tab already saying it, and hang its Reload button off the
+     * end of that. Hoisting both up here gives every screen its first line back
+     * — worth having on a landscape phone with 360 dp of height — and puts
+     * Reload in the same place on all of them.
+     */
+    private fun buildTopBar(): View {
+        val bar = Ui.col(this)
+
+        val line = Ui.row(this)
+        val px = Ui.dp(this, Ui.M)
+        line.setPadding(px, 0, Ui.dp(this, Ui.S), 0)
+        screenTitle = Ui.title(this, "")
+        screenTitle.setTextColor(Ui.dimColor(this))
+        line.addView(screenTitle)
+        Ui.push(this, line)
+        screenAction = Ui.quiet(this, "") {}
+        screenAction.visibility = View.GONE
+        line.addView(screenAction)
+        // A fixed height, so the bar does not jump a few pixels between a
+        // screen that has an action in it and one that does not.
+        bar.addView(line, Ui.lp(this, ViewGroup.LayoutParams.MATCH_PARENT, 40))
+
+        // Only ever on screen when something is wrong or has just happened, so
+        // it is drawn as its own strip rather than as a stray line of red text.
+        statusStrip = Ui.row(this)
+        statusStrip.background = Ui.rounded(Ui.insetColor(this), 9, this)
+        val sp = Ui.dp(this, 10)
+        statusStrip.setPadding(sp, Ui.dp(this, 7), sp, Ui.dp(this, 7))
+        statusLine = Ui.dim(this, "")
+        statusLine.maxLines = 2
+        statusStrip.addView(statusLine)
+        statusStrip.visibility = View.GONE
+        statusStrip.setOnClickListener { if (Repo.authExpired.value) askSignIn() }
+        bar.addView(
+            statusStrip,
+            Ui.wide(this).also {
+                it.setMargins(px, 0, px, Ui.dp(this, Ui.S))
+            }
+        )
+        return bar
+    }
+
+    /** Lets a screen put its one action — Reload, Reconnect — in the top bar. */
+    fun setScreenAction(label: String?, onClick: (() -> Unit)?) {
+        if (label == null || onClick == null) {
+            screenAction.visibility = View.GONE
+            screenAction.setOnClickListener(null)
+            return
+        }
+        screenAction.text = label
+        screenAction.visibility = View.VISIBLE
+        screenAction.setOnClickListener { onClick() }
+    }
+
     private fun buildRail(): View {
         val rail = Ui.col(this)
         rail.setBackgroundColor(Ui.color(this, R.color.bg_rail))
-        rail.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6))
+        val p = Ui.dp(this, 6)
+        rail.setPadding(p, p, p, p)
 
         // Ten tabs have to fit a landscape phone's height without scrolling:
         // one that scrolls with nothing to say so hides Settings off the
         // bottom, and he taps down the list looking for a tab that is there.
         tabs.forEachIndexed { index, tab ->
-            val item = Ui.body(this, tab.label)
-            item.gravity = Gravity.CENTER_VERTICAL
-            item.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6))
+            val item = Ui.row(this)
+            item.background = Ui.pressable(
+                this, Ui.rounded(android.graphics.Color.TRANSPARENT, 8, this),
+                Ui.color(this, R.color.pressed), 8
+            )
             item.isClickable = true
             item.setOnClickListener { showTab(index) }
-            val lp = Ui.lp(this, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.bottomMargin = Ui.dp(this, 1)
-            rail.addView(item, lp)
+
+            // A 2 dp edge marks the tab you are on. A filled pill behind the
+            // label was the loudest thing on the screen and it never changes.
+            val mark = View(this)
+            mark.layoutParams = Ui.lp(this, 2, 16)
+            item.addView(mark)
+
+            val label = Ui.body(this, tab.label)
+            label.setPadding(Ui.dp(this, 8), Ui.dp(this, 7), Ui.dp(this, 4), Ui.dp(this, 7))
+            item.addView(label)
+
+            rail.addView(item, Ui.wide(this))
             railButtons.add(item)
+
+            if (index in groupEnds) {
+                rail.addView(
+                    Ui.divider(this),
+                    Ui.lp(this, ViewGroup.LayoutParams.MATCH_PARENT, 1)
+                        .also { it.setMargins(Ui.dp(this, 10), Ui.dp(this, 4), Ui.dp(this, 10), Ui.dp(this, 4)) }
+                )
+            }
         }
 
         val scroller = ScrollView(this)
@@ -328,11 +414,15 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
     fun showTab(index: Int) {
         if (index !in tabs.indices) return
         current = index
-        railButtons.forEachIndexed { i, view ->
+        railButtons.forEachIndexed { i, item ->
             val on = i == index
-            view.setTextColor(if (on) Ui.textColor(this) else Ui.dimColor(this))
-            view.background = if (on) Ui.rounded(Ui.color(this, R.color.card_alt), 8, this) else null
+            val mark = item.getChildAt(0)
+            val label = item.getChildAt(1) as TextView
+            mark.setBackgroundColor(if (on) Ui.accent(this) else android.graphics.Color.TRANSPARENT)
+            label.setTextColor(if (on) Ui.textColor(this) else Ui.dimColor(this))
         }
+        screenTitle.text = tabs[index].label
+        setScreenAction(null, null)
         supportFragmentManager.beginTransaction()
             .replace(R.id.content_frame, tabs[index].make())
             .commitAllowingStateLoss()
@@ -340,8 +430,9 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
 
     companion object {
         private const val KEY_TAB = "tab"
-        private const val RAIL_WIDTH_DP = 90
-        const val SCAN_TAB = 3
+        private const val RAIL_WIDTH_DP = 88
+        const val CONTROL_TAB = 1
+        const val SCAN_TAB = 4
 
         /** How long a command's outcome stays on the status line. */
         private const val NOTICE_MS = 30_000L

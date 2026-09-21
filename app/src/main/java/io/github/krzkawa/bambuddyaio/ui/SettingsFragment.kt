@@ -14,9 +14,8 @@ class SettingsFragment : BaseFragment() {
     private lateinit var body: LinearLayout
 
     override fun build(ctx: Context) {
-        content.addView(header(ctx, "Settings"))
         body = Ui.col(ctx)
-        content.addView(body, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        content.addView(body, Ui.wide(ctx))
         render()
     }
 
@@ -27,7 +26,7 @@ class SettingsFragment : BaseFragment() {
 
         val connection = Ui.card(ctx)
         connection.addView(Ui.heading(ctx, "Server"))
-        connection.addView(Ui.body(ctx, prefs.serverUrl.ifBlank { "Not set" }))
+        connection.addView(Ui.title(ctx, prefs.serverUrl.ifBlank { "Not set" }))
         val how = when {
             prefs.apiKey.isNotBlank() -> "Signed in with an API key"
             prefs.token.isNotBlank() -> "Signed in as ${prefs.username}"
@@ -47,14 +46,14 @@ class SettingsFragment : BaseFragment() {
                 )
             )
         }
-        connection.addView(Ui.space(ctx, 8))
+        connection.addView(Ui.space(ctx, Ui.M))
         val row = Ui.row(ctx)
         row.addView(Ui.button(ctx, "Change") {
             startActivity(Intent(ctx, SetupActivity::class.java))
             activity?.finish()
         })
-        row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
-        row.addView(Ui.button(ctx, "Sign out") {
+        Ui.gap(ctx, row, Ui.S)
+        row.addView(Ui.quiet(ctx, "Sign out") {
             AlertDialog.Builder(ctx)
                 .setTitle("Sign out?")
                 .setMessage("The app will ask for the server address and credentials again.")
@@ -68,56 +67,51 @@ class SettingsFragment : BaseFragment() {
         })
         connection.addView(row, wide(ctx))
         body.addView(connection)
-        body.addView(Ui.space(ctx, 8))
+        body.addView(Ui.space(ctx, Ui.M))
 
         val display = Ui.card(ctx)
-        display.addView(Ui.heading(ctx, "Display"))
-        val keepRow = Ui.row(ctx)
-        keepRow.addView(
-            Ui.body(ctx, "Keep the screen on while the app is open"),
-            Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        keepRow.addView(Ui.button(ctx, if (prefs.keepScreenOn) "On" else "Off", primary = prefs.keepScreenOn) {
-            prefs.keepScreenOn = !prefs.keepScreenOn
-            (activity as? MainActivity)?.recreate()
-        })
-        display.addView(keepRow, wide(ctx))
-        val fullRow = Ui.row(ctx)
-        fullRow.addView(
-            Ui.body(ctx, "Use the whole screen"),
-            Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        fullRow.addView(Ui.button(ctx, if (prefs.fullScreen) "On" else "Off", primary = prefs.fullScreen) {
-            prefs.fullScreen = !prefs.fullScreen
-            (activity as? MainActivity)?.recreate()
-        })
-        display.addView(fullRow, wide(ctx))
+        display.addView(Ui.heading(ctx, "Screen"))
         display.addView(
-            Ui.tiny(
-                ctx,
-                "On hides the status and navigation bars, which is what makes all ten tabs fit. " +
-                    "Swipe in from an edge to bring them back for a moment."
-            )
+            toggle(
+                ctx, "Keep the screen on", "While the app is open.", prefs.keepScreenOn
+            ) {
+                prefs.keepScreenOn = !prefs.keepScreenOn
+                (activity as? MainActivity)?.recreate()
+            },
+            wide(ctx)
         )
-        display.addView(Ui.tiny(ctx, "The app is locked to landscape either way."))
+        display.addView(Ui.divider(ctx))
+        display.addView(
+            toggle(
+                ctx, "Use the whole screen",
+                "Hides the Android bars, which is what makes all ten tabs fit. " +
+                    "Swipe in from an edge to bring them back.",
+                prefs.fullScreen
+            ) {
+                prefs.fullScreen = !prefs.fullScreen
+                (activity as? MainActivity)?.recreate()
+            },
+            wide(ctx)
+        )
         body.addView(display)
-        body.addView(Ui.space(ctx, 8))
+        body.addView(Ui.space(ctx, Ui.M))
 
         val refresh = Ui.card(ctx)
-        refresh.addView(Ui.heading(ctx, "Refresh every"))
-        refresh.addView(Ui.tiny(ctx, "Slower is easier on an old phone and on the server's rate limit."))
-        refresh.addView(Ui.space(ctx, 6))
-        val rates = Ui.row(ctx)
-        listOf(2, 4, 8, 15, 30).forEach { seconds ->
-            rates.addView(Ui.button(ctx, "${seconds}s", primary = prefs.pollSeconds == seconds) {
-                prefs.pollSeconds = seconds
+        val refreshRow = Ui.row(ctx)
+        val words = Ui.col(ctx)
+        words.addView(Ui.body(ctx, "Refresh every"))
+        words.addView(Ui.tiny(ctx, "Slower is easier on an old phone and on the server."))
+        refreshRow.addView(words, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val rates = listOf(2, 4, 8, 15, 30)
+        refreshRow.addView(
+            Ui.segmented(ctx, rates.map { "${it}s" }, rates.indexOf(prefs.pollSeconds)) { index ->
+                prefs.pollSeconds = rates[index]
                 render()
-            })
-            rates.addView(Ui.space(ctx, 1), Ui.lp(ctx, 6, 1))
-        }
-        refresh.addView(rates, wide(ctx))
+            }
+        )
+        refresh.addView(refreshRow, wide(ctx))
         body.addView(refresh)
-        body.addView(Ui.space(ctx, 8))
+        body.addView(Ui.space(ctx, Ui.M))
 
         val about = Ui.card(ctx)
         about.addView(Ui.heading(ctx, "Versions"))
@@ -146,6 +140,24 @@ class SettingsFragment : BaseFragment() {
         "unknown"
     }
 
-    private fun wide(ctx: Context) =
-        Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+    /** A setting, its explanation, and the switch that is really a button. */
+    private fun toggle(
+        ctx: Context,
+        label: String,
+        detail: String,
+        on: Boolean,
+        onTap: () -> Unit
+    ): LinearLayout {
+        val row = Ui.row(ctx)
+        row.setPadding(0, Ui.dp(ctx, Ui.S), 0, Ui.dp(ctx, Ui.S))
+        val words = Ui.col(ctx)
+        words.addView(Ui.body(ctx, label))
+        words.addView(Ui.tiny(ctx, detail))
+        row.addView(words, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        Ui.gap(ctx, row, Ui.M)
+        row.addView(Ui.segmented(ctx, listOf("Off", "On"), if (on) 1 else 0) { index ->
+            if ((index == 1) != on) onTap()
+        })
+        return row
+    }
 }

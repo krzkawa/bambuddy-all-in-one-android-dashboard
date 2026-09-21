@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
@@ -30,8 +31,9 @@ abstract class BaseFragment : Fragment() {
     ): View {
         val ctx = requireContext()
         content = Ui.col(ctx)
-        val p = Ui.dp(ctx, 12)
-        content.setPadding(p, p, p, p)
+        // The top bar carries the screen's name, so content starts flush with
+        // it; the side gutters are wider than the gap to the bar above.
+        content.setPadding(Ui.dp(ctx, Ui.M), Ui.dp(ctx, Ui.XS), Ui.dp(ctx, Ui.M), Ui.dp(ctx, Ui.M))
         build(ctx)
         val scroller = Ui.scroll(ctx, content)
         scroller.setBackgroundColor(Ui.bg(ctx))
@@ -86,33 +88,48 @@ abstract class BaseFragment : Fragment() {
         Repo.action(label, block) { toast(it) }
     }
 
-    protected fun header(ctx: Context, title: String, subtitle: String? = null): LinearLayout {
-        val head = Ui.col(ctx)
-        head.addView(Ui.big(ctx, title))
-        if (subtitle != null) head.addView(Ui.dim(ctx, subtitle))
-        head.addView(Ui.space(ctx, 10))
-        return head
+    /** Puts this screen's one action in the top bar, beside its name. */
+    protected fun screenAction(label: String, onClick: () -> Unit) {
+        (activity as? MainActivity)?.setScreenAction(label, onClick)
+    }
+
+    /** Full width, own height. */
+    protected fun wide(ctx: Context): LinearLayout.LayoutParams = Ui.wide(ctx)
+
+    /** What a screen says when it has nothing to show yet. */
+    protected fun empty(ctx: Context, message: String): LinearLayout {
+        val box = Ui.col(ctx)
+        box.setPadding(0, Ui.dp(ctx, Ui.L), 0, Ui.dp(ctx, Ui.L))
+        box.addView(Ui.dim(ctx, message))
+        return box
     }
 }
 
-/** Shared row of printer buttons; the whole app follows one selection. */
+/**
+ * Which printer the whole app is following, as one segmented strip.
+ *
+ * It used to be a "Printer" label over a row of filled buttons, where the four
+ * printers shouted as loudly as each other and as loudly as Pause and Stop
+ * below them. One strip, one segment lit, no label — a picker does not need to
+ * announce that it is a picker.
+ */
 fun BaseFragment.buildPrinterPicker(ctx: Context, into: LinearLayout, onPick: (() -> Unit)? = null) {
     into.removeAllViews()
-    val printers = Repo.printers.value
+    val printers = Repo.printers.value.filter { it.optInt("id", -1) >= 0 }
     if (printers.size <= 1) return
-    into.addView(Ui.heading(ctx, "Printer"))
-    val row = Ui.row(ctx)
-    for (p in printers) {
-        val id = p.optInt("id", -1)
-        if (id < 0) continue
-        val on = Repo.selected.value == id
-        val chip = Ui.button(ctx, p.optString("name").ifBlank { "Printer $id" }, primary = on) {
-            Repo.select(id)
-            onPick?.invoke()
-        }
-        row.addView(chip)
-        row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 6, 1))
+
+    val names = printers.map { it.optString("name").ifBlank { "Printer ${it.optInt("id")}" } }
+    val selected = printers.indexOfFirst { it.optInt("id") == Repo.selected.value }
+    val strip = Ui.segmented(ctx, names, selected) { index ->
+        Repo.select(printers[index].optInt("id"))
+        onPick?.invoke()
     }
-    into.addView(row)
-    into.addView(Ui.space(ctx, 10))
+
+    // More printers than fit are scrolled to rather than wrapped: a strip that
+    // reflows moves the segment he was aiming at.
+    val scroller = HorizontalScrollView(ctx)
+    scroller.isHorizontalScrollBarEnabled = false
+    scroller.addView(strip)
+    into.addView(scroller, Ui.lp(ctx, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    into.addView(Ui.space(ctx, Ui.M))
 }

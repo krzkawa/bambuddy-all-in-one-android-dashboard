@@ -14,27 +14,21 @@ class StatsFragment : BaseFragment() {
     private lateinit var body: LinearLayout
 
     override fun build(ctx: Context) {
-        val head = Ui.row(ctx)
-        head.addView(Ui.big(ctx, "Statistics"))
-        head.addView(Ui.space(ctx, 1), Ui.lp(ctx, 0, 1, 1f))
-        head.addView(Ui.button(ctx, "Reload") { load() })
-        content.addView(head, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        content.addView(Ui.space(ctx, 10))
-
+        screenAction("Reload") { load() }
         body = Ui.col(ctx)
-        content.addView(body, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        content.addView(body, Ui.wide(ctx))
         load()
     }
 
     private fun load() {
         val ctx = context ?: return
         body.removeAllViews()
-        body.addView(Ui.dim(ctx, "Loading…"))
+        body.addView(empty(ctx, "Loading…"))
         background({ Repo.api.statistics() }) { result ->
             result.onSuccess { render(it) }
             result.onFailure {
                 body.removeAllViews()
-                body.addView(Ui.dim(ctx, it.message ?: "Could not load the statistics"))
+                body.addView(empty(ctx, it.message ?: "Could not load the statistics"))
             }
         }
     }
@@ -49,21 +43,22 @@ class StatsFragment : BaseFragment() {
         val rate = if (total > 0) (ok * 100.0 / total) else 0.0
 
         val headline = Ui.card(ctx)
-        val row = Ui.row(ctx)
-        row.addView(Ui.stat(ctx, "Prints", total.toString()))
-        gap(ctx, row)
-        row.addView(Ui.stat(ctx, "Succeeded", ok.toString(), Ui.good(ctx)))
-        gap(ctx, row)
-        row.addView(Ui.stat(ctx, "Failed", failed.toString(), if (failed > 0) Ui.bad(ctx) else null))
-        gap(ctx, row)
-        row.addView(Ui.stat(ctx, "Success rate", "${rate.toInt()}%"))
-        headline.addView(row, wide(ctx))
-        headline.addView(Ui.space(ctx, 8))
+        // The success rate is the headline; the counts behind it are the small
+        // print, so they are set as small print rather than as four equals.
+        val crown = Ui.row(ctx)
+        crown.addView(Ui.display(ctx, "${rate.toInt()}%"))
+        Ui.gap(ctx, crown, Ui.M)
+        val breakdownWords = Ui.col(ctx)
+        breakdownWords.addView(Ui.body(ctx, "of prints finished"))
+        breakdownWords.addView(Ui.dim(ctx, "$ok done · $failed failed · $total in all"))
+        crown.addView(breakdownWords, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        headline.addView(crown, wide(ctx))
+        headline.addView(Ui.space(ctx, Ui.M))
         val bar = Bar(ctx)
-        bar.set(rate / 100.0, Ui.good(ctx))
+        bar.set(rate / 100.0, if (failed > 0 && rate < 80) Ui.warn(ctx) else Ui.good(ctx))
         headline.addView(bar.view)
         body.addView(headline)
-        body.addView(Ui.space(ctx, 8))
+        body.addView(Ui.space(ctx, Ui.M))
 
         val totals = Ui.card(ctx)
         val row2 = Ui.row(ctx)
@@ -86,10 +81,9 @@ class StatsFragment : BaseFragment() {
 
     private fun breakdown(ctx: Context, title: String, data: JSONObject?) {
         if (data == null || data.length() == 0) return
-        body.addView(Ui.space(ctx, 8))
+        body.addView(Ui.space(ctx, Ui.M))
         val card = Ui.card(ctx)
         card.addView(Ui.heading(ctx, title))
-        card.addView(Ui.space(ctx, 4))
         val keys = data.keys()
         var max = 1
         val entries = ArrayList<Pair<String, Int>>()
@@ -101,22 +95,17 @@ class StatsFragment : BaseFragment() {
         }
         for ((key, value) in entries.sortedByDescending { it.second }.take(8)) {
             val line = Ui.row(ctx)
-            line.addView(Ui.body(ctx, key), Ui.lp(ctx, 110, ViewGroup.LayoutParams.WRAP_CONTENT))
-            val bar = Bar(ctx)
+            line.addView(Ui.dim(ctx, key), Ui.lp(ctx, 104, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val bar = Bar(ctx, 4)
             bar.set(value.toDouble() / max)
-            line.addView(bar.view, Ui.lp(ctx, 0, 6, 1f))
-            line.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
-            line.addView(Ui.dim(ctx, value.toString()))
+            line.addView(bar.view, Ui.lp(ctx, 0, 4, 1f))
+            Ui.gap(ctx, line, Ui.M)
+            line.addView(Ui.dim(ctx, value.toString()), Ui.lp(ctx, 28, ViewGroup.LayoutParams.WRAP_CONTENT))
             card.addView(line, wide(ctx))
-            card.addView(Ui.space(ctx, 5))
+            card.addView(Ui.space(ctx, Ui.S))
         }
         body.addView(card)
     }
 
-    private fun wide(ctx: Context) =
-        Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-
-    private fun gap(ctx: Context, row: LinearLayout) {
-        row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 14, 1))
-    }
+    private fun gap(ctx: Context, row: LinearLayout) = Ui.gap(ctx, row, Ui.XL)
 }

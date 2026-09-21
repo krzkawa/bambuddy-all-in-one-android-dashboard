@@ -37,11 +37,10 @@ class ControlFragment : BaseFragment() {
     private val settle = Handler(Looper.getMainLooper())
 
     override fun build(ctx: Context) {
-        content.addView(header(ctx, "Control"))
         picker = Ui.col(ctx)
-        content.addView(picker, wide(ctx))
+        content.addView(picker, Ui.wide(ctx))
         body = Ui.col(ctx)
-        content.addView(body, wide(ctx))
+        content.addView(body, Ui.wide(ctx))
 
         observe(Repo.statuses) { render() }
         observe(Repo.selected) { signature = ""; render() }
@@ -53,9 +52,6 @@ class ControlFragment : BaseFragment() {
         live.clear()
         super.onDestroyView()
     }
-
-    private fun wide(ctx: Context) =
-        Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
     private fun render() {
         val ctx = context ?: return
@@ -85,20 +81,20 @@ class ControlFragment : BaseFragment() {
         body.removeAllViews()
 
         if (id < 0 || status == null) {
-            body.addView(Ui.dim(ctx, "Pick a printer that the server can reach."))
+            body.addView(empty(ctx, "The server cannot reach this printer."))
             return
         }
 
         body.addView(printSection(ctx, id, status))
-        body.addView(Ui.space(ctx, 8))
+        body.addView(Ui.space(ctx, Ui.M))
         body.addView(tempSection(ctx, id, status))
-        body.addView(Ui.space(ctx, 8))
+        body.addView(Ui.space(ctx, Ui.M))
         body.addView(fanSection(ctx, id, status))
-        body.addView(Ui.space(ctx, 8))
+        body.addView(Ui.space(ctx, Ui.M))
         body.addView(machineSection(ctx, id, status))
 
         if (faults.isNotEmpty()) {
-            body.addView(Ui.space(ctx, 8))
+            body.addView(Ui.space(ctx, Ui.M))
             body.addView(errorSection(ctx, id, faults))
         }
 
@@ -107,18 +103,28 @@ class ControlFragment : BaseFragment() {
 
     private fun printSection(ctx: Context, id: Int, status: JSONObject): LinearLayout {
         val card = Ui.card(ctx)
-        card.addView(Ui.heading(ctx, "Print"))
         val state = status.str("state") ?: "IDLE"
-        val job = Ui.title(ctx, jobName(status))
-        card.addView(job)
+
+        val headline = Ui.row(ctx)
+        val percent = Ui.display(ctx, percentOf(status))
+        headline.addView(percent)
+        Ui.gap(ctx, headline, Ui.M)
+        val words = Ui.col(ctx)
+        val job = Ui.body(ctx, jobName(status))
+        job.maxLines = 1
+        job.ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        words.addView(job)
         val progress = Ui.dim(ctx, progressLine(status))
-        card.addView(progress)
+        words.addView(progress)
+        headline.addView(words, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        card.addView(headline, Ui.wide(ctx))
         live.add { s ->
+            percent.text = percentOf(s)
             job.text = jobName(s)
             progress.text = progressLine(s)
         }
-        card.addView(Ui.space(ctx, 8))
 
+        card.addView(Ui.space(ctx, Ui.M))
         val row = Ui.row(ctx)
         if (state == "PAUSE") {
             row.addView(Ui.button(ctx, "Resume", primary = true) { command("Resume") { Repo.api.resume(id) } })
@@ -136,36 +142,41 @@ class ControlFragment : BaseFragment() {
         })
         gap(ctx, row)
         row.addView(Ui.button(ctx, "Plate cleared") { command("Clear plate") { Repo.api.clearPlate(id) } })
-        card.addView(row, wide(ctx))
 
         // Only offered on a plate the printer says holds several objects: with
         // one object there is nothing to save by skipping it.
         if ((status.int("printable_objects_count") ?: 0) > 1) {
-            card.addView(Ui.space(ctx, 8))
-            card.addView(Ui.button(ctx, "Skip an object") { chooseObject(ctx, id) })
+            gap(ctx, row)
+            row.addView(Ui.button(ctx, "Skip an object") { chooseObject(ctx, id) })
         }
+        card.addView(row, Ui.wide(ctx))
 
-        card.addView(Ui.space(ctx, 10))
-        card.addView(Ui.heading(ctx, "Speed"))
-        val speeds = Ui.row(ctx)
-        val current = status.int("speed_level") ?: 2
-        listOf(1 to "Silent", 2 to "Standard", 3 to "Sport", 4 to "Ludicrous").forEach { (mode, label) ->
-            speeds.addView(Ui.button(ctx, label, primary = mode == current) {
-                command("Speed $label") { Repo.api.setSpeed(id, mode) }
-            })
-            gap(ctx, speeds)
-        }
-        card.addView(speeds, wide(ctx))
+        card.addView(Ui.space(ctx, Ui.M))
+        card.addView(Ui.divider(ctx))
+        card.addView(Ui.space(ctx, Ui.M))
+        val speedRow = Ui.row(ctx)
+        speedRow.addView(Ui.heading(ctx, "Speed"))
+        Ui.push(ctx, speedRow)
+        val labels = listOf("Silent", "Standard", "Sport", "Ludicrous")
+        val current = (status.int("speed_level") ?: 2).coerceIn(1, 4)
+        speedRow.addView(Ui.segmented(ctx, labels, current - 1) { index ->
+            command("Speed ${labels[index]}") { Repo.api.setSpeed(id, index + 1) }
+        })
+        card.addView(speedRow, Ui.wide(ctx))
         return card
     }
+
+    private fun percentOf(status: JSONObject?): String =
+        "${(status?.dbl("progress") ?: 0.0).toInt()}%"
 
     private fun jobName(status: JSONObject?): String =
         status?.str("subtask_name") ?: status?.str("gcode_file") ?: "Nothing printing"
 
     private fun progressLine(status: JSONObject?): String {
-        val state = status?.str("state") ?: "IDLE"
-        val progress = status?.dbl("progress") ?: 0.0
-        return "$state · ${progress.toInt()}% · ${Ui.minutes(status?.int("remaining_time"))} left"
+        val state = Ui.stateWord(status?.str("state"))
+        val remaining = status?.int("remaining_time")
+        return if (remaining == null || remaining <= 0) state
+        else "$state · ${Ui.minutes(remaining)} left"
     }
 
     // ---------------------------------------------------------- skipping one object
@@ -222,36 +233,37 @@ class ControlFragment : BaseFragment() {
 
         card.addView(heater(ctx, "Nozzle", "nozzle", Temps.NOZZLE_MAX) { target ->
             command("Nozzle ${target}°") { Repo.api.setNozzleTemp(id, target) }
-        })
-        card.addView(Ui.space(ctx, 6))
+        }, Ui.wide(ctx))
+        card.addView(Ui.divider(ctx))
         card.addView(heater(ctx, "Bed", "bed", Temps.BED_MAX) { target ->
             command("Bed ${target}°") { Repo.api.setBedTemp(id, target) }
-        })
+        }, Ui.wide(ctx))
         // Chamber keys are dropped entirely on a printer with no chamber sensor.
         if (status.temp("chamber") != null) {
-            card.addView(Ui.space(ctx, 6))
+            card.addView(Ui.divider(ctx))
             card.addView(heater(ctx, "Chamber", "chamber", Temps.CHAMBER_MAX) { target ->
                 command("Chamber ${target}°") { Repo.api.setChamberTemp(id, target) }
-            })
+            }, Ui.wide(ctx))
         }
         return card
     }
 
     private fun heater(ctx: Context, label: String, key: String, max: Int, send: (Int) -> Unit): LinearLayout {
         val row = Ui.row(ctx)
+        row.setPadding(0, Ui.dp(ctx, Ui.S), 0, Ui.dp(ctx, Ui.S))
         val stat = Ui.stat(ctx, label, "—")
         row.addView(stat, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         val h = Heater(ctx, label, key, max, stat, send)
         live.add { status -> h.show(status) }
 
-        row.addView(Ui.button(ctx, "Set") { typeTemperature(ctx, h) })
-        gap(ctx, row)
+        row.addView(Ui.quiet(ctx, "Off") { h.set(0) })
+        gap(ctx, row, 4)
         row.addView(Ui.button(ctx, "−10") { h.nudge(-10) })
-        gap(ctx, row)
+        gap(ctx, row, 4)
         row.addView(Ui.button(ctx, "+10") { h.nudge(10) })
-        gap(ctx, row)
-        row.addView(Ui.button(ctx, "Off") { h.set(0) })
+        gap(ctx, row, 4)
+        row.addView(Ui.button(ctx, "Set") { typeTemperature(ctx, h) })
         return row
     }
 
@@ -346,16 +358,17 @@ class ControlFragment : BaseFragment() {
     private fun fanSection(ctx: Context, id: Int, status: JSONObject): LinearLayout {
         val card = Ui.card(ctx)
         card.addView(Ui.heading(ctx, "Fans"))
-        card.addView(fanRow(ctx, id, "Part cooling", "part", "cooling_fan_speed"))
-        card.addView(Ui.space(ctx, 6))
-        card.addView(fanRow(ctx, id, "Auxiliary", "aux", "big_fan1_speed"))
-        card.addView(Ui.space(ctx, 6))
-        card.addView(fanRow(ctx, id, "Chamber", "chamber", "big_fan2_speed"))
+        card.addView(fanRow(ctx, id, "Part cooling", "part", "cooling_fan_speed"), Ui.wide(ctx))
+        card.addView(Ui.divider(ctx))
+        card.addView(fanRow(ctx, id, "Auxiliary", "aux", "big_fan1_speed"), Ui.wide(ctx))
+        card.addView(Ui.divider(ctx))
+        card.addView(fanRow(ctx, id, "Chamber", "chamber", "big_fan2_speed"), Ui.wide(ctx))
         return card
     }
 
     private fun fanRow(ctx: Context, id: Int, label: String, fan: String, speedKey: String): LinearLayout {
         val row = Ui.row(ctx)
+        row.setPadding(0, Ui.dp(ctx, Ui.S), 0, Ui.dp(ctx, Ui.S))
         val stat = Ui.stat(ctx, label, "—")
         live.add { status ->
             val speed = status?.int(speedKey)
@@ -364,7 +377,7 @@ class ControlFragment : BaseFragment() {
         row.addView(stat, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         listOf(0, 50, 100).forEach { value ->
             row.addView(Ui.button(ctx, "$value%") { command("$label $value%") { Repo.api.setFan(id, fan, value) } })
-            gap(ctx, row)
+            gap(ctx, row, 4)
         }
         return row
     }
@@ -388,9 +401,9 @@ class ControlFragment : BaseFragment() {
         })
         gap(ctx, row)
         row.addView(Ui.button(ctx, "Refresh") { command("Refresh") { Repo.api.refreshStatus(id) } })
-        card.addView(row, wide(ctx))
+        card.addView(row, Ui.wide(ctx))
 
-        card.addView(Ui.space(ctx, 8))
+        card.addView(Ui.space(ctx, Ui.M))
         val info = Ui.row(ctx)
         val network = Ui.stat(ctx, "Network", "—")
         val door = Ui.stat(ctx, "Door", "—")
@@ -409,30 +422,41 @@ class ControlFragment : BaseFragment() {
             Ui.setStat(sd, if (s?.bool("sdcard") == true) "In" else "None")
         }
         info.addView(network)
-        gap(ctx, info, 14)
+        gap(ctx, info, Ui.XL)
         info.addView(door)
-        gap(ctx, info, 14)
+        gap(ctx, info, Ui.XL)
         info.addView(sd)
-        card.addView(info, wide(ctx))
+        card.addView(info, Ui.wide(ctx))
         return card
     }
 
     private fun errorSection(ctx: Context, id: Int, faults: List<Hms.Fault>): LinearLayout {
         val card = Ui.card(ctx)
-        card.addView(Ui.heading(ctx, "Printer errors"))
-        for (fault in faults.take(6)) {
-            val line = Ui.body(ctx, fault.description)
-            line.setTextColor(Ui.severity(ctx, fault.severity))
-            card.addView(line)
-            fault.detail?.let { card.addView(Ui.tiny(ctx, it)) }
-            actionRow(ctx, id, fault)?.let {
-                card.addView(Ui.space(ctx, 4))
-                card.addView(it, wide(ctx))
+        card.addView(Ui.heading(ctx, "Errors"))
+        faults.take(6).forEachIndexed { index, fault ->
+            if (index > 0) {
+                card.addView(Ui.space(ctx, Ui.S))
+                card.addView(Ui.divider(ctx))
+                card.addView(Ui.space(ctx, Ui.S))
             }
-            card.addView(Ui.space(ctx, 6))
+            val line = Ui.row(ctx)
+            line.gravity = android.view.Gravity.TOP
+            line.addView(Ui.dot(ctx, Ui.severity(ctx, fault.severity)), Ui.lp(ctx, 7, 7).also {
+                it.topMargin = Ui.dp(ctx, 6)
+            })
+            Ui.gap(ctx, line, Ui.S)
+            val words = Ui.col(ctx)
+            words.addView(Ui.body(ctx, fault.description))
+            fault.detail?.let { words.addView(Ui.tiny(ctx, it)) }
+            actionRow(ctx, id, fault)?.let {
+                words.addView(Ui.space(ctx, Ui.S))
+                words.addView(it, Ui.wide(ctx))
+            }
+            line.addView(words, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            card.addView(line, Ui.wide(ctx))
         }
-        card.addView(Ui.space(ctx, 4))
-        card.addView(Ui.button(ctx, "Clear errors") { command("Clear errors") { Repo.api.clearHms(id) } })
+        card.addView(Ui.space(ctx, Ui.M))
+        card.addView(Ui.quiet(ctx, "Clear errors") { command("Clear errors") { Repo.api.clearHms(id) } })
         return card
     }
 
@@ -471,7 +495,5 @@ class ControlFragment : BaseFragment() {
         command(label) { Repo.api.hmsAction(id, code, action, jobId) }
     }
 
-    private fun gap(ctx: Context, row: LinearLayout, width: Int = 8) {
-        row.addView(Ui.space(ctx, 1), Ui.lp(ctx, width, 1))
-    }
+    private fun gap(ctx: Context, row: LinearLayout, width: Int = Ui.S) = Ui.gap(ctx, row, width)
 }

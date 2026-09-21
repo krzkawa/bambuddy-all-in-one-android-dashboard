@@ -13,9 +13,10 @@
     </style>
 
     <style name="AppDialog" parent="Theme.AppCompat.Dialog.Alert">
-        <item name="android:background">@color/card</item>
+        <item name="android:windowBackground">@drawable/dialog_bg</item>
         <item name="android:textColorPrimary">@color/text</item>
         <item name="android:textColorSecondary">@color/text_dim</item>
+        <item name="android:textColorAlertDialogListItem">@color/text</item>
         <item name="colorAccent">@color/accent</item>
     </style>
 </resources>

@@ -20,19 +20,15 @@ class AmsFragment : BaseFragment() {
     private var signature = ""
 
     override fun build(ctx: Context) {
-        content.addView(header(ctx, "AMS"))
         picker = Ui.col(ctx)
-        content.addView(picker, wide(ctx))
+        content.addView(picker, Ui.wide(ctx))
         body = Ui.col(ctx)
-        content.addView(body, wide(ctx))
+        content.addView(body, Ui.wide(ctx))
 
         observe(Repo.statuses) { render() }
         observe(Repo.selected) { signature = ""; render() }
         render()
     }
-
-    private fun wide(ctx: Context) =
-        Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
     private fun render() {
         val ctx = context ?: return
@@ -63,18 +59,18 @@ class AmsFragment : BaseFragment() {
         body.removeAllViews()
 
         if (status == null) {
-            body.addView(Ui.dim(ctx, "Pick a printer that the server can reach."))
+            body.addView(empty(ctx, "The server cannot reach this printer."))
             return
         }
         if (units.isEmpty() && external.isEmpty()) {
-            body.addView(Ui.dim(ctx, "This printer is not reporting an AMS."))
+            body.addView(empty(ctx, "This printer is not reporting an AMS."))
             return
         }
 
         val loadedTray = status.int("tray_now") ?: 255
         for (unit in units) {
             body.addView(unitCard(ctx, id, status, unit, loadedTray))
-            body.addView(Ui.space(ctx, 8))
+            body.addView(Ui.space(ctx, Ui.M))
         }
         if (external.isNotEmpty()) {
             body.addView(externalCard(ctx, id, external, loadedTray))
@@ -93,18 +89,19 @@ class AmsFragment : BaseFragment() {
 
         val top = Ui.row(ctx)
         top.addView(Ui.title(ctx, Assign.unitName(amsId)))
-        top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 12, 1))
+        Ui.push(ctx, top)
+        unit.dbl("temp")?.let {
+            top.addView(Ui.dim(ctx, "${it.toInt()}°C"))
+            Ui.gap(ctx, top, Ui.M)
+        }
         unit.int("humidity")?.let {
-            val chip = Ui.body(ctx, "Humidity $it% · ${humidityWord(it)}")
+            top.addView(Ui.dot(ctx, humidityColor(ctx, it)))
+            Ui.gap(ctx, top, 6)
+            val chip = Ui.dim(ctx, "${humidityWord(it)} · $it%")
             chip.setTextColor(humidityColor(ctx, it))
             top.addView(chip)
         }
-        unit.dbl("temp")?.let {
-            top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 10, 1))
-            top.addView(Ui.dim(ctx, "${it.toInt()}°C"))
-        }
-        top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 0, 1, 1f))
-        card.addView(top, wide(ctx))
+        card.addView(top, Ui.wide(ctx))
 
         val dryStatus = dryStatusOf(status, unit)
         val dryMinutes = dryMinutesOf(status, unit)
@@ -123,13 +120,14 @@ class AmsFragment : BaseFragment() {
             card.addView(line)
         }
 
-        card.addView(Ui.space(ctx, 8))
+        card.addView(Ui.space(ctx, Ui.M))
         for (tray in unit.objects("tray")) {
-            card.addView(slotRow(ctx, printerId, amsId, tray, loadedTray))
+            card.addView(slotRow(ctx, printerId, amsId, tray, loadedTray), Ui.wide(ctx))
             card.addView(Ui.space(ctx, 6))
         }
 
-        card.addView(dryingControls(ctx, printerId, status, amsId, running), wide(ctx))
+        card.addView(Ui.space(ctx, 2))
+        card.addView(dryingControls(ctx, printerId, status, amsId, running), Ui.wide(ctx))
         return card
     }
 
@@ -185,10 +183,13 @@ class AmsFragment : BaseFragment() {
     ): LinearLayout {
         val card = Ui.card(ctx)
         card.addView(Ui.title(ctx, "External spool"))
-        card.addView(Ui.space(ctx, 8))
+        card.addView(Ui.space(ctx, Ui.M))
         for (tray in trays) {
             val trayId = (tray.optInt("id", 254) - 254).coerceIn(0, 1)
-            card.addView(slotRow(ctx, printerId, 255, tray, loadedTray, forcedTrayId = trayId))
+            card.addView(
+                slotRow(ctx, printerId, 255, tray, loadedTray, forcedTrayId = trayId),
+                Ui.wide(ctx)
+            )
             card.addView(Ui.space(ctx, 6))
         }
         return card
@@ -206,16 +207,17 @@ class AmsFragment : BaseFragment() {
         val slot = Assign.Slot(amsId, trayId, Assign.slotName(amsId, trayId), null)
         val isLoaded = loadedTray == slot.globalTrayId || tray.int("state") == TRAY_LOADED
 
-        val row = Ui.row(ctx)
-        row.background = Ui.rounded(
-            Ui.color(ctx, io.github.krzkawa.bambuddyaio.R.color.card_alt), 8, ctx,
-            if (isLoaded) Ui.accent(ctx) else Ui.color(ctx, io.github.krzkawa.bambuddyaio.R.color.stroke)
-        )
-        val p = Ui.dp(ctx, 8)
-        row.setPadding(p, p, p, p)
+        val row = Ui.inset(ctx)
+        if (isLoaded) {
+            // The loaded slot is the one fact this screen exists to show, so it
+            // is the only row that gets an outline.
+            row.background = Ui.rounded(Ui.insetColor(ctx), 10, ctx, Ui.accent(ctx))
+            val p = Ui.dp(ctx, 10)
+            row.setPadding(p, Ui.dp(ctx, Ui.S), p, Ui.dp(ctx, Ui.S))
+        }
 
-        row.addView(Ui.swatch(ctx, tray.str("tray_color"), 26))
-        row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 10, 1))
+        row.addView(Ui.swatch(ctx, tray.str("tray_color"), 24))
+        Ui.gap(ctx, row, 10)
 
         val info = Ui.col(ctx)
         // The firmware's own "a spool is physically here" bit. A slot with no
@@ -230,9 +232,20 @@ class AmsFragment : BaseFragment() {
         val name = tray.str("tray_sub_brands")
             ?: tray.str("tray_type")
             ?: if (present) "Untagged spool" else "Empty"
-        info.addView(Ui.body(ctx, if (amsId == 255) name else "Slot ${trayId + 1} · $name"))
+        val heading = Ui.row(ctx)
+        if (amsId != 255) {
+            val number = Ui.tiny(ctx, "${trayId + 1}")
+            number.setTextColor(Ui.faintColor(ctx))
+            heading.addView(number, Ui.lp(ctx, 12, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        val title = Ui.body(ctx, name)
+        if (!present) title.setTextColor(Ui.faintColor(ctx))
+        heading.addView(title)
+        info.addView(heading, Ui.wide(ctx))
+
         val bits = ArrayList<String>()
-        tray.optInt("remain", -1).takeIf { it in 0..100 }?.let { bits.add("$it%") }
+        val remain = tray.optInt("remain", -1).takeIf { it in 0..100 }
+        remain?.let { bits.add("$it%") }
         tray.dbl("k")?.takeIf { it > 0 }?.let { bits.add("k ${String.format("%.3f", it)}") }
         when {
             isLoaded || trayState == TRAY_LOADED -> bits.add("loaded")
@@ -240,26 +253,29 @@ class AmsFragment : BaseFragment() {
             trayState == TRAY_EMPTY -> bits.add("empty")
         }
         if (tray.str("tray_uuid") != null) bits.add("RFID")
-        info.addView(Ui.tiny(ctx, bits.joinToString(" · ").ifBlank { "No filament reported" }))
+        val detail = Ui.tiny(ctx, bits.joinToString(" · ").ifBlank { "Nothing reported" })
+        // A spool about to run out is the one thing on this row worth colouring.
+        if (remain != null && remain <= LOW_FILAMENT) detail.setTextColor(Ui.warn(ctx))
+        detail.setPadding(if (amsId == 255) 0 else Ui.dp(ctx, 12), 0, 0, 0)
+        info.addView(detail, Ui.wide(ctx))
         row.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        row.addView(Ui.button(ctx, "Assign") { chooseSpoolFor(printerId, slot) })
-        row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 6, 1))
         if (isLoaded) {
-            row.addView(Ui.button(ctx, "Unload") {
+            row.addView(Ui.quiet(ctx, "Unload") {
                 command("Unload") { Repo.api.amsUnload(printerId, slot.globalTrayId) }
             })
         } else {
-            row.addView(Ui.button(ctx, "Load") {
+            row.addView(Ui.quiet(ctx, "Load") {
                 command("Load") { Repo.api.amsLoad(printerId, slot.globalTrayId) }
             })
         }
         if (amsId != 255) {
-            row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 6, 1))
-            row.addView(Ui.button(ctx, "Re-read") {
+            row.addView(Ui.quiet(ctx, "Re-read") {
                 command("RFID re-read") { Repo.api.refreshSlotRfid(printerId, amsId, trayId) }
             })
         }
+        Ui.gap(ctx, row, Ui.XS)
+        row.addView(Ui.button(ctx, "Assign") { chooseSpoolFor(printerId, slot) })
         return row
     }
 
@@ -324,6 +340,9 @@ class AmsFragment : BaseFragment() {
         unit.str(key) ?: status?.str(key)
 
     private companion object {
+        /** Per cent left at which a spool is worth flagging on the row. */
+        const val LOW_FILAMENT = 10
+
         const val HUMIDITY_GOOD = 40
         const val HUMIDITY_FAIR = 60
 

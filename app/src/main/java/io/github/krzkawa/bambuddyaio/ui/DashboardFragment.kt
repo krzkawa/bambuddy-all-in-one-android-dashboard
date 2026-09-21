@@ -26,7 +26,6 @@ class DashboardFragment : BaseFragment() {
     private val ageLines = HashMap<Int, Pair<LinearLayout, TextView>>()
 
     override fun build(ctx: Context) {
-        content.addView(header(ctx, "Printers", "Tap a printer to control it"))
         list = Ui.col(ctx)
         content.addView(list, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
@@ -64,7 +63,7 @@ class DashboardFragment : BaseFragment() {
         ageLines.clear()
 
         if (printers.isEmpty()) {
-            list.addView(Ui.dim(ctx, Repo.error.value ?: "No printers on this Bambuddy server yet."))
+            list.addView(empty(ctx, Repo.error.value ?: "No printers on this Bambuddy server yet."))
             return
         }
 
@@ -72,7 +71,7 @@ class DashboardFragment : BaseFragment() {
             val id = printer.optInt("id", -1)
             if (id < 0) continue
             list.addView(card(ctx, id, printer, statuses[id]))
-            list.addView(Ui.space(ctx, 8))
+            list.addView(Ui.space(ctx, Ui.S))
         }
         refreshAges()
     }
@@ -100,26 +99,30 @@ class DashboardFragment : BaseFragment() {
         val card = Ui.card(ctx)
         val selected = Repo.selected.value == id
         if (selected) {
-            card.background = Ui.rounded(Ui.cardColor(ctx), 10, ctx, Ui.accent(ctx))
+            // The one card you are working on is outlined. Nothing else is.
+            card.background = Ui.rounded(Ui.cardColor(ctx), 12, ctx, Ui.strokeColor(ctx))
         }
         card.isClickable = true
         card.setOnClickListener {
             Repo.select(id)
-            (activity as? MainActivity)?.showTab(1)
+            (activity as? MainActivity)?.showTab(MainActivity.CONTROL_TAB)
         }
 
         val state = status?.str("state") ?: if (status == null) "Offline" else "Idle"
         val connected = status?.bool("connected") ?: false
+        val colour = stateColor(ctx, state, connected)
 
         val top = Ui.row(ctx)
+        top.addView(Ui.dot(ctx, colour))
+        Ui.gap(ctx, top, Ui.S)
         top.addView(Ui.title(ctx, printer.optString("name").ifBlank { "Printer $id" }))
-        top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
-        val badge = Ui.tiny(ctx, if (connected) state else "Not connected")
-        badge.setTextColor(stateColor(ctx, state, connected))
+        Ui.gap(ctx, top, Ui.S)
+        val badge = Ui.dim(ctx, if (connected) Ui.stateWord(state) else "Not connected")
+        badge.setTextColor(colour)
         top.addView(badge)
-        top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 0, 1, 1f))
+        Ui.push(ctx, top)
         printer.str("model")?.let { top.addView(Ui.tiny(ctx, it)) }
-        card.addView(top, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        card.addView(top, Ui.wide(ctx))
 
         // Always built, always hidden while the data is fresh; refreshAges owns it.
         val ageLine = Ui.tiny(ctx, "")
@@ -129,66 +132,106 @@ class DashboardFragment : BaseFragment() {
         ageLines[id] = card to ageLine
 
         if (status == null) {
-            card.addView(Ui.dim(ctx, "No status yet — the server has not reached this printer."))
+            card.addView(Ui.space(ctx, Ui.S))
+            card.addView(Ui.dim(ctx, "The server has not reached this printer."))
             return card
         }
 
-        val job = status.str("subtask_name") ?: status.str("current_print") ?: status.str("gcode_file")
-        if (job != null) {
-            val jobLine = Ui.body(ctx, job)
-            jobLine.maxLines = 1
-            card.addView(jobLine)
-        }
-
         val progress = status.dbl("progress") ?: 0.0
-        if (progress > 0 || state == "RUNNING" || state == "PAUSE") {
-            card.addView(Ui.space(ctx, 6))
-            val bar = Bar(ctx)
-            bar.set(progress / 100.0, stateColor(ctx, state, connected))
-            card.addView(bar.view)
-            card.addView(Ui.space(ctx, 4))
+        // The large figure is for a print that is moving. A finished plate has
+        // nothing left to count, and 100% set in that size just shouts.
+        val running = state == "RUNNING" || state == "PAUSE"
+        val job = status.str("subtask_name") ?: status.str("current_print") ?: status.str("gcode_file")
+
+        // The server says outright when a plate is waiting to be cleared, and
+        // remembers it across a restart. Guessing it from the state does not.
+        val awaitingPlate =
+            if (status.has("awaiting_plate_clear")) status.bool("awaiting_plate_clear")
+            else state == "FINISH" || state == "FAILED"
+
+        // Landscape leaves this card far more width than height, so what the
+        // print is doing and what you can do about it share one line rather
+        // than costing two.
+        card.addView(Ui.space(ctx, Ui.S))
+        val headline = Ui.row(ctx)
+        if (running) {
+            headline.addView(Ui.display(ctx, "${progress.toInt()}%", colour))
+            Ui.gap(ctx, headline, Ui.M)
+        }
+        val words = Ui.col(ctx)
+        if (job != null) {
+            val jobLine = if (running) Ui.body(ctx, job) else Ui.dim(ctx, job)
+            jobLine.maxLines = 1
+            jobLine.ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            words.addView(jobLine)
+        }
+        if (running) {
+            val parts = ArrayList<String>()
             val layers = status.int("layer_num")
             val total = status.int("total_layers")
-            val parts = ArrayList<String>()
-            parts.add("${progress.toInt()}%")
             if (total != null && total > 0) parts.add("layer $layers of $total")
             status.int("remaining_time")?.takeIf { it > 0 }?.let { parts.add("${Ui.minutes(it)} left") }
-            card.addView(Ui.dim(ctx, parts.joinToString(" · ")))
+            if (parts.isNotEmpty()) words.addView(Ui.dim(ctx, parts.joinToString(" · ")))
+        }
+        headline.addView(words, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        if (running) {
+            if (state == "RUNNING") {
+                headline.addView(Ui.button(ctx, "Pause") { command("Pause") { Repo.api.pause(id) } })
+            } else {
+                headline.addView(Ui.button(ctx, "Resume", primary = true) { command("Resume") { Repo.api.resume(id) } })
+            }
+            Ui.gap(ctx, headline, Ui.S)
+            headline.addView(Ui.button(ctx, "Stop") { confirmStop(id) })
+        } else if (awaitingPlate) {
+            headline.addView(Ui.button(ctx, "Plate cleared", primary = true) {
+                command("Clear plate") { Repo.api.clearPlate(id) }
+            })
+        }
+        card.addView(headline, Ui.wide(ctx))
+
+        if (running || progress > 0) {
+            card.addView(Ui.space(ctx, Ui.S))
+            val bar = Bar(ctx)
+            bar.set(progress / 100.0, colour)
+            card.addView(bar.view)
         }
 
         if (state == "PAUSE") runoutNotice(ctx, id, status)?.let { card.addView(it) }
 
-        card.addView(Ui.space(ctx, 8))
+        card.addView(Ui.space(ctx, Ui.M))
         val temps = Ui.row(ctx)
         temps.addView(Ui.stat(ctx, "Nozzle", Ui.temp(status.temp("nozzle"), status.temp("nozzle_target"))))
-        temps.addView(Ui.space(ctx, 1), Ui.lp(ctx, 14, 1))
+        Ui.gap(ctx, temps, Ui.XL)
         temps.addView(Ui.stat(ctx, "Bed", Ui.temp(status.temp("bed"), status.temp("bed_target"))))
         status.temp("chamber")?.let {
-            temps.addView(Ui.space(ctx, 1), Ui.lp(ctx, 14, 1))
+            Ui.gap(ctx, temps, Ui.XL)
             temps.addView(Ui.stat(ctx, "Chamber", Ui.temp(it, status.temp("chamber_target"))))
         }
-        temps.addView(Ui.space(ctx, 1), Ui.lp(ctx, 0, 1, 1f))
-        card.addView(temps, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        val slots = Ui.row(ctx)
+        // The loaded filament sits on the same line as the heat: both answer
+        // "is this machine ready", and a separate AMS heading said nothing.
+        val swatches = Ui.row(ctx)
         var any = false
         for (unit in status.objects("ams")) {
             for (tray in unit.objects("tray")) {
                 any = true
-                slots.addView(Ui.swatch(ctx, tray.str("tray_color"), 16))
-                slots.addView(Ui.space(ctx, 1), Ui.lp(ctx, 4, 1))
+                swatches.addView(Ui.swatch(ctx, tray.str("tray_color"), 14))
+                Ui.gap(ctx, swatches, 5)
             }
-            slots.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
+            Ui.gap(ctx, swatches, Ui.S)
         }
         if (any) {
-            card.addView(Ui.space(ctx, 8))
-            card.addView(Ui.heading(ctx, "AMS"))
-            card.addView(slots, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            Ui.push(ctx, temps)
+            temps.addView(swatches)
         }
+        card.addView(temps, Ui.wide(ctx))
 
         val faults = Hms.faults(status)
         if (faults.isNotEmpty()) {
-            card.addView(Ui.space(ctx, 8))
+            card.addView(Ui.space(ctx, Ui.M))
+            card.addView(Ui.divider(ctx))
+            card.addView(Ui.space(ctx, Ui.S))
             val worst = faults.first()
             val warning = Ui.body(ctx, worst.description)
             warning.setTextColor(Ui.severity(ctx, worst.severity))
@@ -198,28 +241,6 @@ class DashboardFragment : BaseFragment() {
                 if (faults.size > 1) "${faults.size - 1} more" else null
             ).joinToString(" · ")
             if (trailer.isNotBlank()) card.addView(Ui.tiny(ctx, trailer))
-        }
-
-        // The server says outright when a plate is waiting to be cleared, and
-        // remembers it across a restart. Guessing it from the state does not.
-        val awaitingPlate =
-            if (status.has("awaiting_plate_clear")) status.bool("awaiting_plate_clear")
-            else state == "FINISH" || state == "FAILED"
-
-        if (state == "RUNNING" || state == "PAUSE") {
-            card.addView(Ui.space(ctx, 10))
-            val actions = Ui.row(ctx)
-            if (state == "RUNNING") {
-                actions.addView(Ui.button(ctx, "Pause") { command("Pause") { Repo.api.pause(id) } })
-            } else {
-                actions.addView(Ui.button(ctx, "Resume", primary = true) { command("Resume") { Repo.api.resume(id) } })
-            }
-            actions.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
-            actions.addView(Ui.button(ctx, "Stop") { confirmStop(id) })
-            card.addView(actions, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        } else if (awaitingPlate) {
-            card.addView(Ui.space(ctx, 10))
-            card.addView(Ui.button(ctx, "Plate cleared") { command("Clear plate") { Repo.api.clearPlate(id) } })
         }
 
         return card

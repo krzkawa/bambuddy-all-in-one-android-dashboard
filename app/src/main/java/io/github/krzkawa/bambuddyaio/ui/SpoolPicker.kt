@@ -57,10 +57,13 @@ object SpoolPicker {
                 return
             }
             for (spool in shown) {
-                rows.addView(row(ctx, spool) {
-                    dialog.dismiss()
-                    onPick(spool)
-                })
+                rows.addView(
+                    row(ctx, spool) {
+                        dialog.dismiss()
+                        onPick(spool)
+                    },
+                    Ui.wide(ctx)
+                )
                 rows.addView(Ui.space(ctx, 6))
             }
         }
@@ -76,20 +79,18 @@ object SpoolPicker {
     }
 
     private fun row(ctx: Context, spool: JSONObject, onClick: () -> Unit): LinearLayout {
-        val card = Ui.card(ctx)
+        val card = Ui.inset(ctx)
+        card.orientation = LinearLayout.VERTICAL
         val line = Ui.row(ctx)
         line.addView(Ui.swatch(ctx, spool.optString("rgba"), 22))
-        line.addView(Ui.space(ctx, 1), Ui.lp(ctx, 10, 1))
+        Ui.gap(ctx, line, Ui.M)
 
         val info = Ui.col(ctx)
         info.addView(Ui.body(ctx, Assign.spoolName(spool)))
         info.addView(Ui.tiny(ctx, Spools.summary(spool)))
         line.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        card.addView(
-            line,
-            Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        )
+        card.addView(line, Ui.wide(ctx))
         card.isClickable = true
         card.setOnClickListener { onClick() }
         return card

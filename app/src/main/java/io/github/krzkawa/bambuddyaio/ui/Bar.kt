@@ -7,7 +7,7 @@ import android.widget.LinearLayout
 import io.github.krzkawa.bambuddyaio.R
 
 /** A flat progress bar. Two weighted views, so it costs nothing to redraw. */
-class Bar(ctx: Context, heightDp: Int = 6) {
+class Bar(ctx: Context, heightDp: Int = 5) {
 
     private val fill = View(ctx)
     private val rest = View(ctx)
