@@ -7,6 +7,8 @@ import android.view.KeyEvent
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import io.github.krzkawa.bambuddyaio.net.Repo
 
 /** The printer's own camera, at a frame rate an old phone can keep up with. */
@@ -153,6 +155,11 @@ class CameraFragment : BaseFragment() {
                 if (isAdded) openStream(force = true)
             }
         }
+        // A dialog gets its own window, and a new window comes with the system
+        // bars back — which on a 360 dp-tall landscape screen is a fifth of the
+        // very space this gesture was asking for. The main screen's own setting
+        // decides, so someone who wants the navigation bar keeps it here too.
+        dialog.setOnShowListener { hideBarsOf(dialog) }
         fullscreen = dialog
 
         player.moveTo(
@@ -164,6 +171,14 @@ class CameraFragment : BaseFragment() {
         // Tapping the picture is how you got here, so it is how you leave.
         player.setOnClickListener { closeFullscreen() }
         dialog.show()
+    }
+
+    private fun hideBarsOf(dialog: Dialog) {
+        if (!Repo.prefs.fullScreen) return
+        val window = dialog.window ?: return
+        val bars = WindowInsetsControllerCompat(window, window.decorView)
+        bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        bars.hide(WindowInsetsCompat.Type.systemBars())
     }
 
     /** Brings the view back inline, then takes the dialog down. Order matters. */
