@@ -13,6 +13,10 @@ data class SpoolTag(
     val brand: String? = null,
     /** 8 hex chars, RRGGBBAA. */
     val rgba: String? = null,
+    /** The second colour of a dual-colour filament, 8 hex chars RRGGBBAA, or null. */
+    val secondRgba: String? = null,
+    /** How many colours the tag declares. Null when the tag carries no colour count. */
+    val colorCount: Int? = null,
     val filamentWeightG: Int? = null,
     val diameterMm: Double? = null,
     val nozzleTempMin: Int? = null,
@@ -42,4 +46,7 @@ data class SpoolTag(
         get() = detailedType?.takeIf { it.isNotBlank() }
             ?: material?.takeIf { it.isNotBlank() }
             ?: "Unknown filament"
+
+    /** True when the tag declares a second colour, so the swatch should show both. */
+    val isDualColor: Boolean get() = secondRgba != null
 }

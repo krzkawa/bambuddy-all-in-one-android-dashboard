@@ -65,4 +65,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    testImplementation("junit:junit:4.13.2")
+    // The android.jar the unit tests run against stubs org.json out; this puts a real
+    // implementation on the test classpath so the OpenSpool parsing can be tested.
+    testImplementation("org.json:json:20231013")
 }
