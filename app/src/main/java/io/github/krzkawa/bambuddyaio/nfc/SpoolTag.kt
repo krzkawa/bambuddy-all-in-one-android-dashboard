@@ -55,4 +55,19 @@ data class SpoolTag(
 
     /** True when the tag declares a second colour, so the swatch should show both. */
     val isDualColor: Boolean get() = secondRgba != null
+
+    /**
+     * How many filament fields this read actually got off the tag.
+     *
+     * A sector that will not authenticate is skipped rather than failing the read, so
+     * two reads of the same spool can both succeed and one still be thinner than the
+     * other. This is what lets the fuller one win.
+     */
+    val fieldCount: Int
+        get() = listOf(
+            trayUuid, material, detailedType, brand, rgba, secondRgba, colorCount,
+            filamentWeightG, diameterMm, nozzleTempMin, nozzleTempMax, bedTemp,
+            dryingTemp, dryingHours, materialId, variantId, producedAt, lengthM,
+            spoolWidthMm, nozzleDiameterMm, producedAtShort
+        ).count { it != null }
 }

@@ -223,10 +223,18 @@ class Api(private val prefs: Prefs) {
         getArray("inventory/spools", "include_archived" to includeArchived)
 
     /** Null when the tag is not linked to any spool yet. */
-    fun spoolByTag(trayUuid: String?, tagUid: String?): JSONObject? = try {
+    /**
+     * Finds the spool a scanned tag belongs to, or null when there is none.
+     *
+     * Archived spools are included by default: the server leaves them out unless asked,
+     * so rescanning a spool that was archived would otherwise report "not in your
+     * inventory" and invite a duplicate.
+     */
+    fun spoolByTag(trayUuid: String?, tagUid: String?, includeArchived: Boolean = true): JSONObject? = try {
         getObject("inventory/spools/by-tag",
             "tray_uuid" to trayUuid?.ifBlank { null },
-            "tag_uid" to tagUid?.ifBlank { null })
+            "tag_uid" to tagUid?.ifBlank { null },
+            "include_archived" to includeArchived)
     } catch (e: ApiError) {
         if (e.code == 404) null else throw e
     }
