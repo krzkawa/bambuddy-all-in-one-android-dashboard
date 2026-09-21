@@ -9,8 +9,11 @@
     <!-- Not required: the dashboard is fully usable on a phone without NFC. -->
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
 
+    <!-- The only state worth backing up is a server address and a credential
+         for it, so backup is off: neither adb backup nor Google's auto-backup
+         can copy the API key off the phone. -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
