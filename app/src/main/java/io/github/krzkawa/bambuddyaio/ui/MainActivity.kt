@@ -4,6 +4,7 @@ import android.content.Intent
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.os.Bundle
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -12,6 +13,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -22,7 +24,9 @@ import androidx.lifecycle.repeatOnLifecycle
 import io.github.krzkawa.bambuddyaio.R
 import io.github.krzkawa.bambuddyaio.nfc.BambuTag
 import io.github.krzkawa.bambuddyaio.net.Repo
+import io.github.krzkawa.bambuddyaio.util.ago
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -70,13 +74,96 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
 
         showTab(if (savedInstanceState != null) savedInstanceState.getInt(KEY_TAB, 0) else 0)
 
+        // The status line ages, so it runs on a clock rather than on the poll:
+        // when the wifi drops nothing is emitted at all, and that is precisely
+        // when he needs to be told how old the numbers on screen are.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                Repo.error.collect { message ->
-                    statusLine.text = message ?: ""
-                    statusLine.visibility = if (message == null) View.GONE else View.VISIBLE
+                while (true) {
+                    refreshStatusLine()
+                    delay(1000)
                 }
             }
+        }
+    }
+
+    private fun refreshStatusLine() {
+        val now = System.currentTimeMillis()
+        val updated = Repo.updatedAt.value.takeIf { it > 0L }
+        val age = updated?.let { now - it }
+        val notice = Repo.notice.value?.takeIf { now - it.at < NOTICE_MS }
+
+        val (message, colour) = when {
+            Repo.authExpired.value ->
+                "Your sign-in has expired. Tap here to sign in again." to Ui.bad(this)
+            Repo.error.value != null -> {
+                val error = Repo.error.value.orEmpty()
+                (if (age == null) error else "$error · last update ${ago(age)}") to Ui.bad(this)
+            }
+            age != null && age > Repo.staleAfterMs() ->
+                "Not live — last update ${ago(age)}" to Ui.warn(this)
+            notice != null ->
+                notice.message to (if (notice.failed) Ui.bad(this) else Ui.dimColor(this))
+            else -> "" to Ui.dimColor(this)
+        }
+
+        statusLine.text = message
+        statusLine.setTextColor(colour)
+        statusLine.visibility = if (message.isBlank()) View.GONE else View.VISIBLE
+        statusLine.isClickable = Repo.authExpired.value
+    }
+
+    /**
+     * Bambuddy's account tokens last 24 hours and it has no refresh route, so a
+     * phone left against a printer is signed out by morning. This turns that
+     * into one tap instead of a trip through Settings.
+     */
+    private fun askSignIn() {
+        val column = Ui.col(this)
+        val pad = Ui.dp(this, 16)
+        column.setPadding(pad, pad, pad, 0)
+        val user = Ui.input(this, "Username or email", Repo.prefs.username)
+        val pass = Ui.input(this, "Password")
+        pass.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        column.addView(user)
+        column.addView(Ui.space(this, 8))
+        column.addView(pass)
+
+        AlertDialog.Builder(this)
+            .setTitle("Sign in again")
+            .setMessage("An account login runs out after a day. An API key does not — Settings has the option.")
+            .setView(column)
+            .setPositiveButton("Sign in") { _, _ ->
+                signIn(user.text.toString().trim(), pass.text.toString())
+            }
+            .setNegativeButton("Not now", null)
+            .show()
+    }
+
+    private fun signIn(username: String, password: String) {
+        if (username.isBlank() || password.isBlank()) {
+            Ui.toast(this, "Enter your username and password")
+            return
+        }
+        Repo.notice("Signing in…")
+        refreshStatusLine()
+        lifecycleScope.launch {
+            val failure = withContext(Dispatchers.IO) {
+                try {
+                    Repo.prefs.token = Repo.api.login(username, password)
+                    Repo.prefs.username = username
+                    null
+                } catch (e: Exception) {
+                    e.message ?: "Could not sign in"
+                }
+            }
+            if (failure == null) {
+                Repo.notice("Signed in")
+                Repo.signedIn()
+            } else {
+                Repo.notice(failure, failed = true)
+            }
+            refreshStatusLine()
         }
     }
 
@@ -192,6 +279,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
         statusLine.setTextColor(Ui.bad(this))
         statusLine.setPadding(Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 12), 0)
         statusLine.visibility = View.GONE
+        statusLine.setOnClickListener { if (Repo.authExpired.value) askSignIn() }
         right.addView(statusLine, Ui.lp(this, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         val frame = FrameLayout(this)
@@ -254,5 +342,8 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
         private const val KEY_TAB = "tab"
         private const val RAIL_WIDTH_DP = 90
         const val SCAN_TAB = 3
+
+        /** How long a command's outcome stays on the status line. */
+        private const val NOTICE_MS = 30_000L
     }
 }

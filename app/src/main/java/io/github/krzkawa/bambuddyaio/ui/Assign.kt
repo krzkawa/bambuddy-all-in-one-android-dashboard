@@ -11,11 +11,56 @@ import org.json.JSONObject
 /** Shared pieces of "put this spool in that slot". */
 object Assign {
 
+    /** Unit ids an AMS-HT reports; the range comes straight from the firmware. */
+    val HT_UNITS = 128..135
+
     /** One AMS slot, in the form the assignment endpoint wants it. */
     data class Slot(val amsId: Int, val trayId: Int, val label: String, val occupant: String?) {
-        /** Global tray id, which is what the load/unload commands use instead. */
-        val globalTrayId: Int get() = if (amsId == 255) 254 + trayId else amsId * 4 + trayId
+        /**
+         * Global tray id, which is what load, unload and the runout fields use
+         * instead of the unit-and-slot pair.
+         *
+         * An AMS-HT's unit id arrives from MQTT in the range 128-135 and *is*
+         * already the global tray id, so the usual four-per-unit arithmetic
+         * would send a command to tray 512 and quietly do nothing.
+         */
+        val globalTrayId: Int
+            get() = when {
+                amsId == 255 -> 254 + trayId
+                amsId in Assign.HT_UNITS -> amsId
+                else -> amsId * 4 + trayId
+            }
     }
+
+    /** What to call a unit on screen. An HT is not "AMS 129". */
+    fun unitName(amsId: Int): String = when {
+        amsId == 255 -> "External spool"
+        amsId in HT_UNITS -> "AMS HT ${amsId - HT_UNITS.first + 1}"
+        else -> "AMS ${amsId + 1}"
+    }
+
+    /** What to call one slot. An HT holds a single spool, so it has no slot number. */
+    fun slotName(amsId: Int, trayId: Int): String = when {
+        amsId == 255 || amsId in HT_UNITS -> unitName(amsId)
+        else -> "${unitName(amsId)} · slot ${trayId + 1}"
+    }
+
+    /** Turns a globalised tray id back into words, without consulting a status. */
+    fun trayWords(globalTrayId: Int): String = when {
+        globalTrayId == 254 || globalTrayId == 255 -> "External spool"
+        globalTrayId in HT_UNITS -> unitName(globalTrayId)
+        else -> slotName(globalTrayId / 4, globalTrayId % 4)
+    }
+
+    /**
+     * Names a globalised tray id, preferring what this printer actually reports
+     * so an HT or an odd unit id is named the way the AMS screen names it.
+     */
+    fun nameGlobalTray(printerId: Int, globalTrayId: Int): String =
+        findSlot(printerId, globalTrayId)?.label ?: trayWords(globalTrayId)
+
+    fun findSlot(printerId: Int, globalTrayId: Int): Slot? =
+        slotsFor(printerId).firstOrNull { it.globalTrayId == globalTrayId }
 
     fun slotsFor(printerId: Int): List<Slot> {
         val status = Repo.statuses.value[printerId] ?: return emptyList()
@@ -28,7 +73,7 @@ object Assign {
                     Slot(
                         amsId = amsId,
                         trayId = trayId,
-                        label = "AMS ${amsId + 1} · slot ${trayId + 1}",
+                        label = slotName(amsId, trayId),
                         occupant = describe(tray)
                     )
                 )

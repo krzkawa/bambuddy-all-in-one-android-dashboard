@@ -7,7 +7,6 @@ import io.github.krzkawa.bambuddyaio.net.Repo
 import io.github.krzkawa.bambuddyaio.util.bool
 import io.github.krzkawa.bambuddyaio.util.dbl
 import io.github.krzkawa.bambuddyaio.util.int
-import io.github.krzkawa.bambuddyaio.util.objects
 import io.github.krzkawa.bambuddyaio.util.str
 import io.github.krzkawa.bambuddyaio.util.temp
 import org.json.JSONObject
@@ -40,13 +39,16 @@ class ControlFragment : BaseFragment() {
 
         val id = Repo.selected.value
         val status = Repo.statuses.value[id]
+        val faults = Hms.faults(status)
 
         val next = buildString {
             append(id).append(status?.str("state")).append(status?.bool("chamber_light"))
                 .append(status?.int("speed_level")).append(status?.temp("nozzle")?.toInt())
                 .append(status?.temp("bed")?.toInt()).append(status?.temp("chamber")?.toInt())
                 .append(status?.temp("nozzle_target")?.toInt()).append(status?.temp("bed_target")?.toInt())
-                .append(status?.int("cooling_fan_speed")).append(status?.objects("hms_errors")?.size)
+                .append(status?.int("cooling_fan_speed"))
+                .append(faults.size).append(faults.firstOrNull()?.description)
+                .append(status?.bool("wired_network"))
         }
         if (next == signature && body.childCount > 0) return
         signature = next
@@ -66,10 +68,9 @@ class ControlFragment : BaseFragment() {
         body.addView(Ui.space(ctx, 8))
         body.addView(machineSection(ctx, id, status))
 
-        val errors = status.objects("hms_errors")
-        if (errors.isNotEmpty()) {
+        if (faults.isNotEmpty()) {
             body.addView(Ui.space(ctx, 8))
-            body.addView(errorSection(ctx, id, errors))
+            body.addView(errorSection(ctx, id, faults))
         }
     }
 
@@ -212,7 +213,14 @@ class ControlFragment : BaseFragment() {
 
         card.addView(Ui.space(ctx, 8))
         val info = Ui.row(ctx)
-        info.addView(Ui.stat(ctx, "Wi-Fi", status.int("wifi_signal")?.let { "$it dBm" } ?: "Wired"))
+        // wired_network is a real boolean on the status. A null wifi_signal only
+        // ever meant "the printer did not say", which is not the same as wired.
+        val network = when {
+            status.bool("wired_network") -> "Wired"
+            status.int("wifi_signal") != null -> "${status.int("wifi_signal")} dBm"
+            else -> "—"
+        }
+        info.addView(Ui.stat(ctx, "Network", network))
         gap(ctx, info, 14)
         info.addView(Ui.stat(ctx, "Door", if (status.bool("door_open")) "Open" else "Closed"))
         gap(ctx, info, 14)
@@ -221,13 +229,15 @@ class ControlFragment : BaseFragment() {
         return card
     }
 
-    private fun errorSection(ctx: Context, id: Int, errors: List<JSONObject>): LinearLayout {
+    private fun errorSection(ctx: Context, id: Int, faults: List<Hms.Fault>): LinearLayout {
         val card = Ui.card(ctx)
         card.addView(Ui.heading(ctx, "Printer errors"))
-        for (error in errors.take(6)) {
-            val line = Ui.body(ctx, error.str("text") ?: error.str("code") ?: "Unknown error")
-            line.setTextColor(Ui.bad(ctx))
+        for (fault in faults.take(6)) {
+            val line = Ui.body(ctx, fault.description)
+            line.setTextColor(Ui.severity(ctx, fault.severity))
             card.addView(line)
+            fault.detail?.let { card.addView(Ui.tiny(ctx, it)) }
+            card.addView(Ui.space(ctx, 4))
         }
         card.addView(Ui.space(ctx, 8))
         card.addView(Ui.button(ctx, "Clear errors") { command("Clear errors") { Repo.api.clearHms(id) } })

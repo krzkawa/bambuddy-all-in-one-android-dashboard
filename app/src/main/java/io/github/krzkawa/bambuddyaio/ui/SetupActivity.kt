@@ -87,6 +87,8 @@ class SetupActivity : AppCompatActivity() {
         passField.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         right.addView(passField, wide())
         right.addView(Ui.space(this, 6))
+        right.addView(Ui.dim(this, "An account login runs out after 24 hours and asks for your password again. An API key does not expire, so it is the better one for a phone left next to a printer."))
+        right.addView(Ui.space(this, 6))
         right.addView(Ui.dim(this, "Leave both sides blank if your server has authentication turned off."))
 
         columns.addView(left, Ui.lp(this, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))

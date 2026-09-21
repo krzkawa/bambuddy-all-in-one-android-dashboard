@@ -12,7 +12,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import io.github.krzkawa.bambuddyaio.net.Repo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -44,6 +46,20 @@ abstract class BaseFragment : Fragment() {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 flow.collect { block(it) }
             }
+        }
+    }
+
+    /**
+     * Fires on the main thread every [ms] while the screen is visible.
+     *
+     * Nothing at all is emitted while the network is down, so anything on
+     * screen that ages — "not live since…" — needs a clock of its own.
+     */
+    protected fun ticker(ms: Long): Flow<Long> = flow {
+        var tick = 0L
+        while (true) {
+            emit(tick++)
+            delay(ms)
         }
     }
 
