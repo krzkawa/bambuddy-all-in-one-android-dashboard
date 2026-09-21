@@ -13,6 +13,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -62,6 +64,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
         }
 
         applyKeepAwake()
+        applyFullScreen()
         setContentView(buildLayout())
         nfc = NfcAdapter.getDefaultAdapter(this)
 
@@ -85,6 +88,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
     override fun onResume() {
         super.onResume()
         applyKeepAwake()
+        applyFullScreen()
         Repo.start()
         enableReader()
     }
@@ -110,6 +114,30 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+    }
+
+    /**
+     * The status bar and the navigation bar together are about 72 dp of a
+     * landscape 720p screen's 360 — a fifth of it, spent on chrome a propped-up
+     * dashboard never taps. Sticky immersive gives it back and still lets a
+     * swipe from the edge bring the bars up for a moment.
+     */
+    private fun applyFullScreen() {
+        val bars = WindowInsetsControllerCompat(window, window.decorView)
+        if (Repo.prefs.fullScreen) {
+            bars.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            bars.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            bars.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // A dialog or the notification shade puts the bars back; this takes
+        // the screen again once we have focus, which is what "sticky" means.
+        if (hasFocus) applyFullScreen()
     }
 
     // ------------------------------------------------------------------- NFC
@@ -154,7 +182,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         )
 
-        root.addView(buildRail(), Ui.lp(this, 104, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(buildRail(), Ui.lp(this, RAIL_WIDTH_DP, ViewGroup.LayoutParams.MATCH_PARENT))
 
         val right = Ui.col(this)
         statusLine = Ui.tiny(this, "")
@@ -176,20 +204,27 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
         rail.setBackgroundColor(Ui.color(this, R.color.bg_rail))
         rail.setPadding(Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6))
 
+        // Ten tabs have to fit a landscape phone's height without scrolling:
+        // one that scrolls with nothing to say so hides Settings off the
+        // bottom, and he taps down the list looking for a tab that is there.
         tabs.forEachIndexed { index, tab ->
             val item = Ui.body(this, tab.label)
             item.gravity = Gravity.CENTER_VERTICAL
-            item.setPadding(Ui.dp(this, 10), Ui.dp(this, 9), Ui.dp(this, 8), Ui.dp(this, 9))
+            item.setPadding(Ui.dp(this, 8), Ui.dp(this, 6), Ui.dp(this, 6), Ui.dp(this, 6))
             item.isClickable = true
             item.setOnClickListener { showTab(index) }
             val lp = Ui.lp(this, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.bottomMargin = Ui.dp(this, 2)
+            lp.bottomMargin = Ui.dp(this, 1)
             rail.addView(item, lp)
             railButtons.add(item)
         }
 
         val scroller = ScrollView(this)
         scroller.setBackgroundColor(Ui.color(this, R.color.bg_rail))
+        // Kept as a safety net for a shorter screen or a large system font.
+        // The bar no longer fades out, so when it does scroll it says so.
+        scroller.isVerticalScrollBarEnabled = true
+        scroller.isScrollbarFadingEnabled = false
         scroller.addView(
             rail,
             LinearLayout.LayoutParams(
@@ -214,6 +249,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
 
     companion object {
         private const val KEY_TAB = "tab"
+        private const val RAIL_WIDTH_DP = 90
         const val SCAN_TAB = 3
     }
 }
