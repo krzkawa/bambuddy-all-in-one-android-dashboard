@@ -91,6 +91,12 @@ class CameraFragment : BaseFragment() {
             }
             Repo.api.cameraStreamUrl(printerId, 5, token)
         }) { result ->
+            // Minting the token takes a round trip, and in that time the screen
+            // may have moved on — a second Reconnect, or another printer picked.
+            // Starting this player now would put a stream behind a view nobody
+            // holds any more, and nothing would ever stop it.
+            if (view !== player) return@background
+
             result.onSuccess { url ->
                 note.text = "${Repo.printerName(printerId)} · tap the picture for fullscreen"
                 streaming = printerId
