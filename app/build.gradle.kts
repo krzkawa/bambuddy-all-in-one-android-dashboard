@@ -1,3 +1,8 @@
+// CI stamps the build it produced into the APK so the phone can say which one
+// it is running. A build from a laptop is always "dev".
+val buildNumber = (findProperty("buildNumber") as String?)?.toIntOrNull() ?: 1
+val buildSha = (findProperty("buildSha") as String?).orEmpty().take(7)
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -12,8 +17,8 @@ android {
         // Android 7.0 Nougat — the oldest device this app is built for.
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = buildNumber
+        versionName = if (buildSha.isBlank()) "dev" else "0.1.$buildNumber ($buildSha)"
         resourceConfigurations += listOf("en")
     }
 
@@ -57,12 +62,10 @@ dependencies {
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
-    implementation("androidx.recyclerview:recyclerview:1.3.2")
-    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     implementation("androidx.fragment:fragment-ktx:1.8.5")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
+    // Keystore-backed SharedPreferences for the server credential.
+    implementation("androidx.security:security-crypto:1.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 

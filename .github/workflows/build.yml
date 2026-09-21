@@ -26,8 +26,14 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # buildNumber/buildSha become the APK's versionCode and versionName, so
+      # Settings on the phone can say which build is installed. run_number only
+      # ever goes up, which is what an over-the-top reinstall needs.
       - name: Build debug and release
-        run: ./gradlew testDebugUnitTest assembleDebug assembleRelease --stacktrace
+        run: |
+          ./gradlew testDebugUnitTest assembleDebug assembleRelease --stacktrace \
+            -PbuildNumber=${{ github.run_number }} \
+            -PbuildSha=${{ github.sha }}
 
       - name: Name the APKs after the run
         run: |
@@ -35,6 +41,7 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk out/bambuddy-aio-debug.apk
           cp app/build/outputs/apk/release/app-release.apk out/bambuddy-aio.apk
           ls -la out
+          echo "Build ${{ github.run_number }} ($(echo ${{ github.sha }} | cut -c1-7))" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -49,7 +56,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          notes="Built from ${{ github.sha }}. Download bambuddy-aio.apk straight onto the phone and open it."
+          short=$(echo "${{ github.sha }}" | cut -c1-7)
+          notes="Build ${{ github.run_number }} ($short). Download bambuddy-aio.apk straight onto the phone and open it. Settings > Versions on the phone shows the same build number, so you can always tell what is installed."
           gh release view latest >/dev/null 2>&1 \
             || gh release create latest --title "Latest build" --notes "$notes" --prerelease
           gh release edit latest --notes "$notes"
@@ -81,7 +89,9 @@ jobs:
           java-version: '17'
 
       # API 24 is Android 7.0, the oldest version this app supports and the one
-      # the phone it is written for runs.
+      # the phone it is written for runs. The release APK is the one installed
+      # here because it is the one he downloads, and it is the only build R8
+      # runs over — a keep rule that goes missing breaks that one alone.
       - name: Install and screenshot
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -97,7 +107,7 @@ jobs:
           # not reachable from every environment.
           script: |
             mkdir -p shots
-            adb install -r out/bambuddy-aio-debug.apk > shots/install.txt 2>&1 || true
+            adb install -r out/bambuddy-aio.apk > shots/install.txt 2>&1 || true
             adb logcat -c || true
             adb shell am start -n io.github.krzkawa.bambuddyaio/.ui.MainActivity > shots/start.txt 2>&1 || true
             sleep 15
@@ -122,6 +132,7 @@ jobs:
             echo "### am start"
             echo '```'; tail -10 shots/start.txt 2>/dev/null || echo "no output"; echo '```'
             echo "installed: $installed, on screen: $running"
+            echo "credential storage: $(grep -o 'Credentials are [a-z ]*' shots/logcat.txt 2>/dev/null | tail -1 || echo 'not reported')"
             echo "### crash"
             echo '```'; [ -n "$crash" ] && echo "$crash" || echo "none"; echo '```'
             echo "### app log lines"
