@@ -182,7 +182,10 @@ object Ui {
     fun swatch(ctx: Context, rgba: String?, sizeDp: Int = 22): View {
         val v = View(ctx)
         v.layoutParams = lp(ctx, sizeDp, sizeDp)
-        v.background = rounded(parseColor(rgba) ?: color(ctx, R.color.card_alt), 4, ctx, color(ctx, R.color.stroke))
+        // Tags exist whose alpha byte is 00. Honouring that draws nothing at
+        // all, and an invisible chip tells him less than the wrong colour would.
+        val fill = parseColor(rgba)?.or(0xFF000000.toInt()) ?: color(ctx, R.color.card_alt)
+        v.background = rounded(fill, 4, ctx, color(ctx, R.color.stroke))
         return v
     }
 
@@ -226,4 +229,12 @@ object Ui {
     }
 
     fun percent(v: Double?): String = if (v == null) "—" else "${v.toInt()}%"
+
+    /** Colour for an HMS severity: 1 fatal, 2 serious, 3 common, 4 info. */
+    fun severity(ctx: Context, level: Int?): Int = when (level) {
+        Hms.COMMON -> warn(ctx)
+        Hms.INFO -> dimColor(ctx)
+        // Fatal, serious, and anything unrecognised: assume it matters.
+        else -> bad(ctx)
+    }
 }

@@ -5,6 +5,7 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import androidx.appcompat.app.AlertDialog
 import io.github.krzkawa.bambuddyaio.net.Repo
+import io.github.krzkawa.bambuddyaio.util.bool
 import io.github.krzkawa.bambuddyaio.util.dbl
 import io.github.krzkawa.bambuddyaio.util.int
 import io.github.krzkawa.bambuddyaio.util.objects
@@ -45,12 +46,13 @@ class AmsFragment : BaseFragment() {
         val next = buildString {
             append(id)
             append(status?.int("tray_now"))
+            append(status?.bool("supports_drying")).append(status?.str("state"))
             for (u in units) {
-                append(u.optInt("id")).append(u.int("humidity")).append(u.int("dry_status"))
-                    .append(u.int("dry_time"))
+                append(u.optInt("id")).append(u.int("humidity")).append(dryStatusOf(status, u))
+                    .append(dryMinutesOf(status, u))
                 for (t in u.objects("tray")) {
                     append(t.str("tray_type")).append(t.str("tray_color")).append(t.optInt("remain"))
-                        .append(t.int("state"))
+                        .append(t.int("state")).append(t.bool("exists"))
                 }
             }
             for (t in external) append(t.str("tray_type")).append(t.optInt("remain"))
@@ -71,7 +73,7 @@ class AmsFragment : BaseFragment() {
 
         val loadedTray = status.int("tray_now") ?: 255
         for (unit in units) {
-            body.addView(unitCard(ctx, id, unit, loadedTray))
+            body.addView(unitCard(ctx, id, status, unit, loadedTray))
             body.addView(Ui.space(ctx, 8))
         }
         if (external.isNotEmpty()) {
@@ -79,15 +81,21 @@ class AmsFragment : BaseFragment() {
         }
     }
 
-    private fun unitCard(ctx: Context, printerId: Int, unit: JSONObject, loadedTray: Int): LinearLayout {
+    private fun unitCard(
+        ctx: Context,
+        printerId: Int,
+        status: JSONObject,
+        unit: JSONObject,
+        loadedTray: Int
+    ): LinearLayout {
         val card = Ui.card(ctx)
         val amsId = unit.optInt("id")
 
         val top = Ui.row(ctx)
-        top.addView(Ui.title(ctx, "AMS ${amsId + 1}"))
+        top.addView(Ui.title(ctx, Assign.unitName(amsId)))
         top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 12, 1))
         unit.int("humidity")?.let {
-            val chip = Ui.body(ctx, "Humidity $it%")
+            val chip = Ui.body(ctx, "Humidity $it% · ${humidityWord(it)}")
             chip.setTextColor(humidityColor(ctx, it))
             top.addView(chip)
         }
@@ -98,9 +106,21 @@ class AmsFragment : BaseFragment() {
         top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 0, 1, 1f))
         card.addView(top, wide(ctx))
 
-        val drying = (unit.int("dry_time") ?: 0) > 0
-        if (drying) {
-            card.addView(Ui.dim(ctx, "Drying · ${Ui.minutes(unit.int("dry_time"))} remaining"))
+        val dryStatus = dryStatusOf(status, unit)
+        val dryMinutes = dryMinutesOf(status, unit)
+        // dry_status is the truth: a cycle can be checking, cooling or in error
+        // with no minutes left to count, and an error counting down to nothing
+        // is the one case where he most needs to be told.
+        val running = (dryStatus != null && dryStatus in DRY_CHECKING..DRY_STOPPING) || dryMinutes > 0
+        if (running || dryStatus == DRY_ERROR) {
+            val bits = ArrayList<String>()
+            dryStatusWord(dryStatus)?.let { bits.add(it) }
+            if (dryMinutes > 0) bits.add("${Ui.minutes(dryMinutes)} remaining")
+            firstInt(status, unit, "dry_target_temp")?.takeIf { it > 0 }?.let { bits.add("${it}°C") }
+            firstStr(status, unit, "dry_filament")?.let { bits.add(it) }
+            val line = Ui.body(ctx, bits.joinToString(" · ").ifBlank { "Drying" })
+            line.setTextColor(if (dryStatus == DRY_ERROR) Ui.bad(ctx) else Ui.dimColor(ctx))
+            card.addView(line)
         }
 
         card.addView(Ui.space(ctx, 8))
@@ -109,16 +129,52 @@ class AmsFragment : BaseFragment() {
             card.addView(Ui.space(ctx, 6))
         }
 
-        val actions = Ui.row(ctx)
-        if (drying) {
-            actions.addView(Ui.button(ctx, "Stop drying") {
+        card.addView(dryingControls(ctx, printerId, status, amsId, running), wide(ctx))
+        return card
+    }
+
+    /**
+     * The drying row, or the reason there is not one.
+     *
+     * The server states what this printer can actually do — a P1 can only start
+     * a cycle from its own screen, and some cannot dry while printing — so a
+     * button that was always going to fail is replaced by the reason.
+     */
+    private fun dryingControls(
+        ctx: Context,
+        printerId: Int,
+        status: JSONObject,
+        amsId: Int,
+        running: Boolean
+    ): LinearLayout {
+        val row = Ui.row(ctx)
+        if (running) {
+            row.addView(Ui.button(ctx, "Stop drying") {
                 command("Stop drying") { Repo.api.stopDrying(printerId, amsId) }
             })
-        } else {
-            actions.addView(Ui.button(ctx, "Dry") { askDrying(ctx, printerId, amsId) })
+            return row
         }
-        card.addView(actions, wide(ctx))
-        return card
+
+        // An older server that says nothing gets the benefit of the doubt.
+        val supported = if (status.has("supports_drying")) status.bool("supports_drying") else true
+        val screenOnly = status.bool("drying_screen_only")
+        val whilePrinting =
+            if (status.has("supports_drying_while_printing")) status.bool("supports_drying_while_printing") else true
+        val printing = status.str("state") == "RUNNING"
+        val reason = status.str("dry_sf_reason")
+
+        val blocked = when {
+            !supported -> reason ?: "This printer cannot be told to dry from here."
+            screenOnly -> reason ?: "Start drying from the printer's own screen."
+            printing && !whilePrinting -> reason ?: "This printer cannot dry while it is printing."
+            else -> null
+        }
+        if (blocked != null) {
+            row.addView(Ui.dim(ctx, blocked))
+        } else {
+            row.addView(Ui.button(ctx, "Dry") { askDrying(ctx, printerId, amsId) })
+        }
+        return row
     }
 
     private fun externalCard(
@@ -148,7 +204,7 @@ class AmsFragment : BaseFragment() {
     ): LinearLayout {
         val trayId = forcedTrayId ?: tray.optInt("id")
         val slot = Assign.Slot(amsId, trayId, "", null)
-        val isLoaded = loadedTray == slot.globalTrayId
+        val isLoaded = loadedTray == slot.globalTrayId || tray.int("state") == TRAY_LOADED
 
         val row = Ui.row(ctx)
         row.background = Ui.rounded(
@@ -162,12 +218,27 @@ class AmsFragment : BaseFragment() {
         row.addView(Ui.space(ctx, 1), Ui.lp(ctx, 10, 1))
 
         val info = Ui.col(ctx)
-        val name = tray.str("tray_sub_brands") ?: tray.str("tray_type") ?: "Empty"
+        // The firmware's own "a spool is physically here" bit. A slot with no
+        // type name is not necessarily empty: a spool without an RFID tag has
+        // no name to report, and calling that "Empty" sends him to the wrong AMS.
+        val trayState = tray.int("state")
+        val present = when {
+            trayState != null -> trayState >= TRAY_PRESENT
+            tray.has("exists") -> tray.bool("exists")
+            else -> tray.str("tray_type") != null
+        }
+        val name = tray.str("tray_sub_brands")
+            ?: tray.str("tray_type")
+            ?: if (present) "Untagged spool" else "Empty"
         info.addView(Ui.body(ctx, if (amsId == 255) name else "Slot ${trayId + 1} · $name"))
         val bits = ArrayList<String>()
         tray.optInt("remain", -1).takeIf { it in 0..100 }?.let { bits.add("$it%") }
         tray.dbl("k")?.takeIf { it > 0 }?.let { bits.add("k ${String.format("%.3f", it)}") }
-        if (isLoaded) bits.add("loaded")
+        when {
+            isLoaded || trayState == TRAY_LOADED -> bits.add("loaded")
+            trayState == TRAY_PRESENT -> bits.add("in the slot")
+            trayState == TRAY_EMPTY -> bits.add("empty")
+        }
         if (tray.str("tray_uuid") != null) bits.add("RFID")
         info.addView(Ui.tiny(ctx, bits.joinToString(" · ").ifBlank { "No filament reported" }))
         row.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -212,11 +283,20 @@ class AmsFragment : BaseFragment() {
         }
     }
 
+    private fun dryStatusWord(dryStatus: Int?): String? = when (dryStatus) {
+        1 -> "Checking"
+        2 -> "Drying"
+        3 -> "Cooling"
+        4 -> "Stopping"
+        DRY_ERROR -> "Drying error"
+        else -> null
+    }
+
     private fun askDrying(ctx: Context, printerId: Int, amsId: Int) {
         val options = arrayOf("45° for 6h (PLA, PETG)", "55° for 8h (ABS, ASA)", "65° for 8h (PA, PC)")
         val settings = listOf(45 to 6, 55 to 8, 65 to 8)
         AlertDialog.Builder(ctx)
-            .setTitle("Dry AMS ${amsId + 1}")
+            .setTitle("Dry ${Assign.unitName(amsId)}")
             .setItems(options) { _, which ->
                 val (temp, hours) = settings[which]
                 command("Drying") { Repo.api.startDrying(printerId, amsId, temp, hours) }
@@ -225,9 +305,49 @@ class AmsFragment : BaseFragment() {
             .show()
     }
 
+    /**
+     * Bambuddy's own web UI calls 40 and below good and 60 and below fair, and
+     * both thresholds are configurable on the server. Anything stricter paints
+     * a perfectly normal AMS orange and sends him hunting for a problem.
+     */
     private fun humidityColor(ctx: Context, humidity: Int): Int = when {
-        humidity <= 20 -> Ui.good(ctx)
-        humidity <= 40 -> Ui.warn(ctx)
+        humidity <= HUMIDITY_GOOD -> Ui.good(ctx)
+        humidity <= HUMIDITY_FAIR -> Ui.warn(ctx)
         else -> Ui.bad(ctx)
+    }
+
+    private fun humidityWord(humidity: Int): String = when {
+        humidity <= HUMIDITY_GOOD -> "Good"
+        humidity <= HUMIDITY_FAIR -> "Fair"
+        else -> "Damp"
+    }
+
+    // Drying state can be reported on the unit or on the printer, depending on
+    // the model; take whichever one actually said something.
+    private fun dryStatusOf(status: JSONObject?, unit: JSONObject): Int? =
+        firstInt(status, unit, "dry_status")
+
+    private fun dryMinutesOf(status: JSONObject?, unit: JSONObject): Int =
+        firstInt(status, unit, "dry_time") ?: 0
+
+    private fun firstInt(status: JSONObject?, unit: JSONObject, key: String): Int? =
+        unit.int(key) ?: status?.int(key)
+
+    private fun firstStr(status: JSONObject?, unit: JSONObject, key: String): String? =
+        unit.str(key) ?: status?.str(key)
+
+    private companion object {
+        const val HUMIDITY_GOOD = 40
+        const val HUMIDITY_FAIR = 60
+
+        // dry_status: 0 off, 1 checking, 2 drying, 3 cooling, 4 stopping, 5 error.
+        const val DRY_CHECKING = 1
+        const val DRY_STOPPING = 4
+        const val DRY_ERROR = 5
+
+        // tray.state: 9 empty, 10 a spool is in the slot, 11 it is loaded.
+        const val TRAY_EMPTY = 9
+        const val TRAY_PRESENT = 10
+        const val TRAY_LOADED = 11
     }
 }
