@@ -5,8 +5,8 @@ queue, history, statistics and camera on one landscape screen, plus reading a
 spool's NFC tag and assigning that spool to a chosen AMS slot.
 
 It targets Android 7.0 and up, keeps the screen on, and
-is locked to landscape so it can sit propped up next to a printer.
-My thinking was to use it on old Anroid phone that i can leave on my desk/next to a printer
+is locked to landscape. My thinking was to use it on old Android
+phone that i can leave on my desk/next to a printer
 
 ## Getting the app
 
