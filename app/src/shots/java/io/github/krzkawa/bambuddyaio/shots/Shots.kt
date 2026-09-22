@@ -77,11 +77,61 @@ class Shots {
         .put("subtask_name", "calibration_cube.3mf")
         .put("temperatures", JSONObject().put("nozzle", 41.0).put("bed", 28.0))
 
+    /**
+     * A stand-in Bambuddy, so the parts of a screen that come from a request
+     * rather than from the status poll are in the picture too.
+     */
+    private fun fakeServer(): Int {
+        val queue = JSONArray()
+            .put(JSONObject().put("id", 11).put("status", "printing")
+                .put("archive_name", "bracket_v3_plate.gcode.3mf").put("printer_id", 1))
+            .put(JSONObject().put("id", 12).put("status", "pending")
+                .put("archive_name", "hinge_left_x4.3mf").put("printer_id", 1)
+                .put("print_time_seconds", 4920).put("filament_used_grams", 38.0))
+            .put(JSONObject().put("id", 13).put("status", "pending")
+                .put("archive_name", "vase_spiral.3mf").put("printer_id", 1)
+                .put("filament_short", true))
+            .put(JSONObject().put("id", 14).put("status", "completed")
+                .put("archive_name", "old_and_done.3mf").put("printer_id", 1))
+        // A bare socket rather than com.sun.net.httpserver, which the android.jar
+        // these tests compile against does not carry.
+        val socket = java.net.ServerSocket(0, 4, java.net.InetAddress.getLoopbackAddress())
+        Thread {
+            while (!socket.isClosed) {
+                try {
+                    socket.accept().use { client ->
+                        val reader = client.getInputStream().bufferedReader()
+                        val request = reader.readLine().orEmpty()
+                        while (true) {
+                            val header = reader.readLine()
+                            if (header.isNullOrBlank()) break
+                        }
+                        val body = if (request.contains("queue")) queue.toString() else "[]"
+                        val bytes = body.toByteArray()
+                        client.getOutputStream().apply {
+                            write(
+                                ("HTTP/1.1 200 OK\r\n" +
+                                    "Content-Type: application/json\r\n" +
+                                    "Content-Length: ${bytes.size}\r\n" +
+                                    "Connection: close\r\n\r\n").toByteArray()
+                            )
+                            write(bytes)
+                            flush()
+                        }
+                    }
+                } catch (e: Exception) {
+                    return@Thread
+                }
+            }
+        }.apply { isDaemon = true }.start()
+        return socket.localPort
+    }
+
     @Test
     fun shoot() {
         val app = org.robolectric.RuntimeEnvironment.getApplication()
         Repo.init(app)
-        Repo.prefs.serverUrl = "http://192.168.1.50:8000"
+        Repo.prefs.serverUrl = "http://127.0.0.1:${fakeServer()}"
         Repo.prefs.apiKey = "bb_demo"
         Repo.prefs.fullScreen = true
 
@@ -99,15 +149,20 @@ class Shots {
         val out = File(System.getProperty("shots.dir") ?: "build/shots")
         out.mkdirs()
 
-        listOf(0 to "printers", 1 to "control", 3 to "ams", 4 to "scan", 8 to "stats", 9 to "settings")
-            .forEach { (tab, name) ->
-                activity.showTab(tab)
-                shadowOf(Looper.getMainLooper()).idle()
-                Repo.stop()
-                seed("_error", null as String?)
-                shadowOf(Looper.getMainLooper()).idle()
-                capture(activity.window.decorView, File(out, "$name.png"))
-            }
+        listOf(
+            0 to "printers", 1 to "control", 3 to "ams",
+            4 to "scan", 6 to "queue", 8 to "stats", 9 to "settings"
+        ).forEach { (tab, name) ->
+            activity.showTab(tab)
+            shadowOf(Looper.getMainLooper()).idle()
+            // A screen that fetches does so on a real background thread here,
+            // so give it a moment to come back before drawing.
+            Thread.sleep(400)
+            Repo.stop()
+            seed("_error", null as String?)
+            shadowOf(Looper.getMainLooper()).idle()
+            capture(activity.window.decorView, File(out, "$name.png"))
+        }
     }
 
     private fun capture(view: View, file: File) {

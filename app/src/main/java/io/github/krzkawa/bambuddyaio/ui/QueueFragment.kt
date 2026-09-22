@@ -40,11 +40,15 @@ class QueueFragment : BaseFragment() {
     private fun render(items: List<JSONObject>) {
         val ctx = context ?: return
         list.removeAllViews()
-        if (items.isEmpty()) {
-            list.addView(empty(ctx, "Nothing queued."))
+        // Finished prints live on the History screen. This one answers "what is
+        // the printer doing and what is it doing next", so a week of completed
+        // jobs pushing that off the top is just noise.
+        val shown = Queue.upcoming(items)
+        if (shown.isEmpty()) {
+            list.addView(empty(ctx, "Nothing waiting. Finished prints are on the History screen."))
             return
         }
-        for (item in items) {
+        for (item in shown) {
             list.addView(row(ctx, item), Ui.wide(ctx))
             list.addView(Ui.space(ctx, 6))
         }
@@ -55,16 +59,27 @@ class QueueFragment : BaseFragment() {
         card.background = Ui.rounded(Ui.cardColor(ctx), 10, ctx)
         val line = Ui.row(ctx)
 
+        // A dot ahead of the name says which one is on the printer right now.
+        val active = Queue.isActive(item)
+        line.addView(Ui.dot(ctx, if (active) Ui.good(ctx) else Ui.faintColor(ctx)))
+        Ui.gap(ctx, line, 10)
+
         val info = Ui.col(ctx)
         val name = Queue.itemName(item)
-        info.addView(Ui.body(ctx, name))
+        info.addView(if (active) Ui.title(ctx, name) else Ui.body(ctx, name))
         val bits = ArrayList<String>()
-        item.str("status")?.let { bits.add(it) }
+        item.str("status")?.let { bits.add(Ui.stateWord(it)) }
         item.str("printer_name")?.let { bits.add(it) }
         item.int("print_time_seconds")?.takeIf { it > 0 }?.let { bits.add(Ui.minutes(it / 60)) }
         item.dbl("filament_used_grams")?.takeIf { it > 0 }?.let { bits.add("${it.toInt()} g") }
         info.addView(Ui.tiny(ctx, bits.joinToString(" · ")))
-        Queue.waitingReason(item)?.let { info.addView(Ui.tiny(ctx, it)) }
+        // The reason it is sitting there is the one thing on the row worth
+        // colouring: it is usually the same check that will refuse a Start.
+        Queue.waitingReason(item)?.let {
+            val why = Ui.tiny(ctx, it)
+            why.setTextColor(Ui.warn(ctx))
+            info.addView(why)
+        }
         line.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         line.addView(Ui.quiet(ctx, "Remove") {
