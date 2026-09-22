@@ -4,8 +4,9 @@ An Android app for a [Bambuddy](https://bambuddy.cool) server: printers, AMS,
 queue, history, statistics and camera on one landscape screen, plus reading a
 spool's NFC tag and assigning that spool to a chosen AMS slot.
 
-Built for an old phone. It targets Android 7.0 and up, keeps the screen on, and
+It targets Android 7.0 and up, keeps the screen on, and
 is locked to landscape so it can sit propped up next to a printer.
+My thinking was to use it on old Anroid phone that i can leave on my desk/next to a printer
 
 ## Getting the app
 
