@@ -1,6 +1,6 @@
 # Running this dashboard on an iPhone
 
-Written 2026-09-22, against `main` at `d916ba3`, in answer to two questions: make the app
+Written 2026-09-22, against `main` at `4fd2cf6`, in answer to two questions: make the app
 work on iOS 12 and later, and can an iPhone scan and write ordinary NFC stickers.
 
 Every claim about Apple's APIs below was checked against Apple's own documentation rather
@@ -38,7 +38,7 @@ it. Apple's own documentation shows the consequence:
   produces no delegate callback at all from `NFCTagReaderSession`: the tag is rejected during
   polling, so the app never even sees the UID it would need to derive the keys from.
 
-So all 445 lines of key derivation and block decoding in `nfc/` are unusable on iOS, not
+So all 495 lines of key derivation and block decoding in `nfc/` are unusable on iOS, not
 because they would be hard to port, but because nothing on the platform can hand them sector
 bytes.
 
@@ -128,25 +128,25 @@ section 6 costs out.
 
 ## 5. What ports from the Kotlin app
 
-Measured on `main` at `d916ba3`:
+Measured on `main` at `4fd2cf6`, after the GUI rework merged:
 
 | Area | Lines | Ports? |
 | --- | ---: | --- |
-| `nfc/` pure logic — keys, blocks, sectors, OpenSpool, SpoolTag | 445 | Ports cleanly, but is dead weight on iOS: nothing can feed it Classic sectors. The OpenSpool parsing is the one part a sticker-reading iOS app would want, and it is ~64 lines. |
+| `nfc/` pure logic — keys, blocks, sectors, OpenSpool, SpoolTag | 495 | Ports cleanly, but is dead weight on iOS: nothing can feed it Classic sectors. The OpenSpool parsing is the one part a sticker-reading iOS app would want, and it is ~64 lines. |
 | `nfc/BambuTag.kt` — Android NFC transport | 221 | No iOS equivalent exists. |
 | `net/Api.kt` — REST client | 417 | Shape ports, code does not: OkHttp → `URLSession`, `org.json` → `Codable`. |
 | `net/Repo.kt` — polling, state | 220 | Shape ports: coroutines + `StateFlow` → `async`/`await` + an observable object. |
 | `net/Prefs.kt` — credential storage | 196 | `EncryptedSharedPreferences` → Keychain. |
-| `ui/` — 27 files, all ten tabs, incl. a hand-rolled MJPEG decoder | 5,351 | Complete rewrite. |
+| `ui/` — 27 files, all ten tabs, incl. a hand-rolled MJPEG decoder | 5,548 | Complete rewrite. |
 
-About 85% of the line count is a rewrite either way. The Bambuddy API surface and the polling
+About 85% of the 7,197 Kotlin lines is a rewrite either way. The Bambuddy API surface and the polling
 behaviour are the real assets, and those are knowledge rather than code — they transfer
 whether or not a single line does.
 
 **Kotlin Multiplatform** is the alternative to rewriting `net/`. It is not worth it here: it
-means restructuring the single Gradle module into KMP source sets (which cannot happen while
-the GUI rework is in flight), swapping OkHttp for Ktor, and it shares about a sixth of the
-code while adding a toolchain that still needs a Mac at the end of it.
+means restructuring the single Gradle module into KMP source sets, swapping OkHttp for Ktor,
+and it shares about a sixth of the code while adding a toolchain that still needs a Mac at
+the end of it.
 
 ## 6. What it costs outside the code
 
@@ -179,7 +179,7 @@ rather than hold everything back to one floor. Deployment target 12.0, then:
 Two consequences of holding the target at 12.0, worth being clear about rather than
 discovering later:
 
-- **The whole UI is UIKit.** SwiftUI is iOS 13+, and mixing the two across a 5,000-line app to
+- **The whole UI is UIKit.** SwiftUI is iOS 13+, and mixing the two across a 5,500-line app to
   save nothing is not worth it. UIKit in code matches how the Android app is already written,
   so this is the familiar style, not a penalty.
 - **iOS 12 can only be tested on real hardware.** Xcode's simulators stop at iOS 15. CI can
