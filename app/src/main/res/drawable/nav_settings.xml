@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A cog: eight teeth and a bore, computed so the teeth are even. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M10.33,1.94 L13.67,1.94 L13.83,4.62 L15.92,5.49 L17.93,3.70 L20.30,6.07 L18.51,8.08 L19.38,10.17 L22.06,10.33 L22.06,13.67 L19.38,13.83 L18.51,15.92 L20.30,17.93 L17.93,20.30 L15.92,18.51 L13.83,19.38 L13.67,22.06 L10.33,22.06 L10.17,19.38 L8.08,18.51 L6.07,20.30 L3.70,17.93 L5.49,15.92 L4.62,13.83 L1.94,13.67 L1.94,10.33 L4.62,10.17 L5.49,8.08 L3.70,6.07 L6.07,3.70 L8.08,5.49 L10.17,4.62 Z M12.00,8.60 a3.40,3.40 0 1,0 0.01,0 Z" />
+</vector>

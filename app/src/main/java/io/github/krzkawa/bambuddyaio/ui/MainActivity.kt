@@ -10,6 +10,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -37,7 +38,7 @@ import kotlinx.coroutines.withContext
  */
 class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
 
-    private data class Tab(val label: String, val make: () -> Fragment)
+    private data class Tab(val label: String, val icon: Int, val make: () -> Fragment)
 
     /**
      * Ten tabs is a lot to scan. They are ordered the way the work goes — the
@@ -45,16 +46,16 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
      * groups so the eye can jump to a group instead of reading all ten.
      */
     private val tabs = listOf(
-        Tab("Printers") { DashboardFragment() },
-        Tab("Control") { ControlFragment() },
-        Tab("Camera") { CameraFragment() },
-        Tab("AMS") { AmsFragment() },
-        Tab("Scan") { ScanFragment() },
-        Tab("Spools") { SpoolsFragment() },
-        Tab("Queue") { QueueFragment() },
-        Tab("History") { HistoryFragment() },
-        Tab("Stats") { StatsFragment() },
-        Tab("Settings") { SettingsFragment() }
+        Tab("Printers", R.drawable.nav_printers) { DashboardFragment() },
+        Tab("Control", R.drawable.nav_control) { ControlFragment() },
+        Tab("Camera", R.drawable.nav_camera) { CameraFragment() },
+        Tab("AMS", R.drawable.nav_ams) { AmsFragment() },
+        Tab("Scan", R.drawable.nav_scan) { ScanFragment() },
+        Tab("Spools", R.drawable.nav_spools) { SpoolsFragment() },
+        Tab("Queue", R.drawable.nav_queue) { QueueFragment() },
+        Tab("History", R.drawable.nav_history) { HistoryFragment() },
+        Tab("Stats", R.drawable.nav_stats) { StatsFragment() },
+        Tab("Settings", R.drawable.nav_settings) { SettingsFragment() }
     )
 
     /** The last tab of each group; a hairline goes under it. */
@@ -365,23 +366,28 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
         // Ten tabs have to fit a landscape phone's height without scrolling:
         // one that scrolls with nothing to say so hides Settings off the
         // bottom, and he taps down the list looking for a tab that is there.
+        // That is the whole budget, and it is why each row is as short as it
+        // is — the icon is what makes a short row easy to aim at, because the
+        // shape is recognised before the word is read.
         tabs.forEachIndexed { index, tab ->
             val item = Ui.row(this)
-            item.background = Ui.pressable(
-                this, Ui.rounded(android.graphics.Color.TRANSPARENT, 8, this),
-                Ui.color(this, R.color.pressed), 8
-            )
             item.isClickable = true
-            item.setOnClickListener { showTab(index) }
 
-            // A 2 dp edge marks the tab you are on. A filled pill behind the
+            // A 3 dp edge marks the tab you are on. A filled pill behind the
             // label was the loudest thing on the screen and it never changes.
             val mark = View(this)
-            mark.layoutParams = Ui.lp(this, 2, 16)
+            mark.layoutParams = Ui.lp(this, 3, 20)
             item.addView(mark)
 
+            val icon = ImageView(this)
+            icon.setImageResource(tab.icon)
+            item.addView(
+                icon,
+                Ui.lp(this, 20, 20).also { it.setMargins(Ui.dp(this, 9), 0, Ui.dp(this, 9), 0) }
+            )
+
             val label = Ui.body(this, tab.label)
-            label.setPadding(Ui.dp(this, 8), Ui.dp(this, 7), Ui.dp(this, 4), Ui.dp(this, 7))
+            label.setPadding(0, Ui.dp(this, 7), 0, Ui.dp(this, 7))
             item.addView(label)
 
             rail.addView(item, Ui.wide(this))
@@ -391,7 +397,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
                 rail.addView(
                     Ui.divider(this),
                     Ui.lp(this, ViewGroup.LayoutParams.MATCH_PARENT, 1)
-                        .also { it.setMargins(Ui.dp(this, 10), Ui.dp(this, 4), Ui.dp(this, 10), Ui.dp(this, 4)) }
+                        .also { it.setMargins(Ui.dp(this, 10), Ui.dp(this, 3), Ui.dp(this, 10), Ui.dp(this, 3)) }
                 )
             }
         }
@@ -417,9 +423,19 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
         railButtons.forEachIndexed { i, item ->
             val on = i == index
             val mark = item.getChildAt(0)
-            val label = item.getChildAt(1) as TextView
+            val icon = item.getChildAt(1) as ImageView
+            val label = item.getChildAt(2) as TextView
             mark.setBackgroundColor(if (on) Ui.accent(this) else android.graphics.Color.TRANSPARENT)
+            icon.setColorFilter(if (on) Ui.textColor(this) else Ui.faintColor(this))
             label.setTextColor(if (on) Ui.textColor(this) else Ui.dimColor(this))
+            // The row you are on is lifted off the rail as well as marked, so
+            // it reads at a glance from across the room rather than up close.
+            item.background =
+                if (on) Ui.rounded(Ui.color(this, R.color.card_alt), 8, this)
+                else Ui.pressable(
+                    this, Ui.rounded(android.graphics.Color.TRANSPARENT, 8, this),
+                    Ui.color(this, R.color.pressed), 8
+                )
         }
         screenTitle.text = tabs[index].label
         setScreenAction(null, null)
@@ -430,7 +446,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
 
     companion object {
         private const val KEY_TAB = "tab"
-        private const val RAIL_WIDTH_DP = 88
+        private const val RAIL_WIDTH_DP = 106
         const val CONTROL_TAB = 1
         const val SCAN_TAB = 4
 

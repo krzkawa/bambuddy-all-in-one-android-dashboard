@@ -63,6 +63,25 @@ jobs:
           gh release edit latest --notes "$notes"
           gh release upload latest out/bambuddy-aio.apk out/bambuddy-aio-debug.apk --clobber
 
+      # The same idea for a branch that has not landed yet. Work now arrives as
+      # a pull request, and a pull request nobody can install is a pull request
+      # nobody can judge — the whole app is a thing you look at on a phone. The
+      # tag is fixed, so the link never changes, and it always holds the newest
+      # pull-request build rather than one per branch.
+      - name: Publish a preview APK for a pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          short=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
+          notes="Preview of #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}
+          Build ${{ github.run_number }} ($short) from \`${{ github.head_ref }}\`, not merged yet.
+          Install bambuddy-aio.apk over the top of what you have; Settings > Versions shows this build number. The main release is still at the \`latest\` tag."
+          gh release view preview >/dev/null 2>&1 \
+            || gh release create preview --title "Preview build" --notes "$notes" --prerelease
+          gh release edit preview --notes "$notes"
+          gh release upload preview out/bambuddy-aio.apk out/bambuddy-aio-debug.apk --clobber
+
   smoke:
     name: Launch on Android 7
     needs: apk

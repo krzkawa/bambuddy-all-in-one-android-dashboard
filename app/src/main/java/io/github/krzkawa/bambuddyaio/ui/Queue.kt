@@ -95,6 +95,55 @@ object Queue {
     fun canStart(item: JSONObject): Boolean = item.str("status") == "pending"
 
     /**
+     * Statuses that mean an item is over and done with.
+     *
+     * Written as the list of endings rather than as a list of live states so
+     * that a status this app has never heard of still shows up: a queue that
+     * silently drops the item he is waiting on is worse than one that shows a
+     * row too many.
+     */
+    private val FINISHED = setOf(
+        "completed", "complete", "done", "finished", "success", "succeeded",
+        "failed", "error", "cancelled", "canceled", "stopped", "aborted",
+        "skipped", "removed", "archived", "expired"
+    )
+
+    /** Live states, which sort above the ones still waiting their turn. */
+    private val ACTIVE = setOf(
+        "printing", "running", "active", "in_progress", "started",
+        "starting", "sending", "preparing", "uploading", "paused"
+    )
+
+    private fun statusOf(item: JSONObject): String =
+        item.str("status")?.trim()?.lowercase().orEmpty()
+
+    /** True once an item has finished, one way or another. */
+    fun isFinished(item: JSONObject): Boolean = statusOf(item) in FINISHED
+
+    /** True while the printer is actually working on it. */
+    fun isActive(item: JSONObject): Boolean = statusOf(item) in ACTIVE
+
+    /**
+     * The queue as it is worth looking at: what is printing now, then what is
+     * lined up behind it. Everything that has already been and gone belongs to
+     * the History screen, which is where it now stays.
+     */
+    fun upcoming(items: List<JSONObject>): List<JSONObject> =
+        items.filterNot { isFinished(it) }
+            .sortedBy { if (isActive(it)) 0 else 1 }
+
+    /**
+     * The next thing lined up for one printer, for the Printers screen.
+     *
+     * An item the server has not tied to a printer counts for whichever
+     * printer is asking: it is going to land on one of them, and on the usual
+     * single-printer setup it is going to land on this one.
+     */
+    fun nextFor(items: List<JSONObject>, printerId: Int): JSONObject? =
+        items.filterNot { isFinished(it) || isActive(it) }
+            .firstOrNull { (it.int("printer_id") ?: printerId) == printerId }
+
+    /**
      * Why an item is sitting there, when the server has said so.
      *
      * `filament_short` is the scheduler's own flag from its last pass, which is

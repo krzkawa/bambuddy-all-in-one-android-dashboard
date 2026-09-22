@@ -22,6 +22,9 @@ class DashboardFragment : BaseFragment() {
     private lateinit var list: LinearLayout
     private var signature = ""
 
+    /** What is lined up behind what is printing. Polled apart from the status. */
+    private var queued: List<JSONObject> = emptyList()
+
     /** Each card's "not live" line, so its age can tick without a rebuild. */
     private val ageLines = HashMap<Int, Pair<LinearLayout, TextView>>()
 
@@ -32,6 +35,9 @@ class DashboardFragment : BaseFragment() {
         observe(Repo.statuses) { render() }
         observe(Repo.selected) { render() }
         observe(ticker(5_000)) { refreshAges() }
+        // The queue is not part of the status poll, so it gets a slow clock of
+        // its own: what is next changes when a print ends, not second by second.
+        observe(ticker(60_000)) { loadQueue() }
         render()
     }
 
@@ -52,6 +58,13 @@ class DashboardFragment : BaseFragment() {
                     .append(s?.temp("bed")?.toInt()).append(s?.bool("connected"))
                     .append(s?.bool("awaiting_plate_clear"))
                     .append(s?.int("expected_tray")).append(s?.int("previous_tray"))
+                    .append(s?.bool("chamber_light"))
+                    .append(Queue.nextFor(queued, p.optInt("id"))?.let { Queue.itemName(it) })
+                    .append(s?.objects("ams")?.joinToString {
+                        u -> u.objects("tray").joinToString { t ->
+                            "${t.str("tray_type")}${t.optInt("remain")}${t.int("state")}"
+                        }
+                    })
                     .append(Hms.faults(s).firstOrNull()?.description)
                     .append(s?.objects("hms_errors")?.size)
             }
@@ -74,6 +87,17 @@ class DashboardFragment : BaseFragment() {
             list.addView(Ui.space(ctx, Ui.S))
         }
         refreshAges()
+    }
+
+    private fun loadQueue() {
+        background({ Repo.api.queue() }) { result ->
+            result.onSuccess {
+                queued = it.objects()
+                render()
+            }
+            // A queue that will not load costs him one line at the foot of a
+            // card. It is not worth a message over the status that did load.
+        }
     }
 
     /**
@@ -169,11 +193,33 @@ class DashboardFragment : BaseFragment() {
             val parts = ArrayList<String>()
             val layers = status.int("layer_num")
             val total = status.int("total_layers")
-            if (total != null && total > 0) parts.add("layer $layers of $total")
-            status.int("remaining_time")?.takeIf { it > 0 }?.let { parts.add("${Ui.minutes(it)} left") }
-            if (parts.isNotEmpty()) words.addView(Ui.dim(ctx, parts.joinToString(" · ")))
+            // "118/184" rather than "layer 118 of 184": this line has to hold
+            // three facts and still sit on one row beside the buttons.
+            if (total != null && total > 0) parts.add("$layers/$total")
+            status.int("remaining_time")?.takeIf { it > 0 }?.let {
+                // Both forms, because they answer different questions: how much
+                // longer if you are waiting for it, and what time to come back
+                // if you are not.
+                parts.add("${Ui.minutes(it)} left")
+                parts.add("done ${finishTime(ctx, it)}")
+            }
+            if (parts.isNotEmpty()) {
+                val line = Ui.dim(ctx, parts.joinToString(" · "))
+                line.maxLines = 1
+                words.addView(line)
+            }
         }
         headline.addView(words, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+        // The light is the one thing you reach for that is not about the print
+        // itself, and it was a tab away.
+        if (connected && status.has("chamber_light")) {
+            val lightOn = status.bool("chamber_light")
+            headline.addView(Ui.quiet(ctx, if (lightOn) "Light off" else "Light on") {
+                command("Light") { Repo.api.setLight(id, !lightOn) }
+            })
+            Ui.gap(ctx, headline, Ui.XS)
+        }
 
         if (running) {
             if (state == "RUNNING") {
@@ -209,23 +255,34 @@ class DashboardFragment : BaseFragment() {
             temps.addView(Ui.stat(ctx, "Chamber", Ui.temp(it, status.temp("chamber_target"))))
         }
 
-        // The loaded filament sits on the same line as the heat: both answer
-        // "is this machine ready", and a separate AMS heading said nothing.
-        val swatches = Ui.row(ctx)
-        var any = false
-        for (unit in status.objects("ams")) {
-            for (tray in unit.objects("tray")) {
-                any = true
-                swatches.addView(Ui.swatch(ctx, tray.str("tray_color"), 14))
-                Ui.gap(ctx, swatches, 5)
-            }
-            Ui.gap(ctx, swatches, Ui.S)
-        }
-        if (any) {
-            Ui.push(ctx, temps)
-            temps.addView(swatches)
-        }
         card.addView(temps, Ui.wide(ctx))
+
+        // What is in the AMS, under the heat: together they answer "is this
+        // machine ready to go". Bare colour dots did not — a dot cannot say
+        // PLA, and it cannot say the spool is nearly out. On its own line
+        // because a full unit is wider than what is left beside a chamber
+        // temperature, and a slot that runs off the card is worse than a row.
+        amsStrip(ctx, status)?.let {
+            card.addView(Ui.space(ctx, 10))
+            card.addView(it, Ui.wide(ctx))
+        }
+
+        Queue.nextFor(queued, id)?.let { next ->
+            card.addView(Ui.space(ctx, Ui.S))
+            val line = Ui.row(ctx)
+            line.addView(Ui.tiny(ctx, "Next"))
+            Ui.gap(ctx, line, Ui.S)
+            val name = Ui.dim(ctx, Queue.itemName(next))
+            name.maxLines = 1
+            name.ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            line.addView(name, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            Queue.waitingReason(next)?.let {
+                val why = Ui.tiny(ctx, it)
+                why.setTextColor(Ui.warn(ctx))
+                line.addView(why)
+            }
+            card.addView(line, Ui.wide(ctx))
+        }
 
         val faults = Hms.faults(status)
         if (faults.isNotEmpty()) {
@@ -244,6 +301,58 @@ class DashboardFragment : BaseFragment() {
         }
 
         return card
+    }
+
+    /** The clock time a print with this many minutes left will finish at. */
+    private fun finishTime(ctx: Context, minutesLeft: Int): String {
+        val at = java.util.Calendar.getInstance()
+        at.add(java.util.Calendar.MINUTE, minutesLeft)
+        // The phone's own setting decides 24-hour or not.
+        return android.text.format.DateFormat.getTimeFormat(ctx).format(at.time)
+    }
+
+    /**
+     * Every slot on the printer, small: colour, what is in it, how much is left.
+     *
+     * A whole AMS has to fit beside the temperatures, so the material name is
+     * dropped once there are more slots than one unit's worth — at that point
+     * the colours and the percentages are what is being scanned anyway.
+     */
+    private fun amsStrip(ctx: Context, status: JSONObject): LinearLayout? {
+        val trays = status.objects("ams").flatMap { it.objects("tray") } +
+            status.objects("vt_tray")
+        if (trays.isEmpty()) return null
+        val room = trays.size <= 4
+
+        val strip = Ui.row(ctx)
+        trays.forEachIndexed { index, tray ->
+            if (index > 0) Ui.gap(ctx, strip, Ui.M)
+            val slot = Ui.row(ctx)
+            slot.addView(Ui.swatch(ctx, tray.str("tray_color"), 12))
+            Ui.gap(ctx, slot, 6)
+
+            val bits = ArrayList<String>()
+            if (room) {
+                (tray.str("tray_sub_brands") ?: tray.str("tray_type"))?.let { bits.add(it) }
+            }
+            val remain = tray.optInt("remain", -1).takeIf { it in 0..100 }
+            remain?.let { bits.add("$it%") }
+
+            val label = Ui.tiny(ctx, when {
+                bits.isNotEmpty() -> bits.joinToString(" ")
+                room -> "Empty"
+                else -> "—"
+            })
+            when {
+                // The firmware's own "this one is loaded" bit, rather than
+                // arithmetic on tray_now that an AMS HT would break.
+                tray.int("state") == LOADED -> label.setTextColor(Ui.textColor(ctx))
+                remain != null && remain <= LOW -> label.setTextColor(Ui.warn(ctx))
+            }
+            slot.addView(label)
+            strip.addView(slot)
+        }
+        return strip
     }
 
     /**
@@ -295,6 +404,14 @@ class DashboardFragment : BaseFragment() {
             .setPositiveButton("Stop") { _, _ -> command("Stop") { Repo.api.stop(id) } }
             .setNegativeButton("Keep printing", null)
             .show()
+    }
+
+    private companion object {
+        /** tray.state 11: the firmware says this slot is the one loaded. */
+        const val LOADED = 11
+
+        /** Per cent left at which a spool is worth flagging. */
+        const val LOW = 10
     }
 
     private fun stateColor(ctx: Context, state: String?, connected: Boolean): Int = when {
