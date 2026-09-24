@@ -1,5 +1,6 @@
 package io.github.krzkawa.bambuddyaio.ui
 
+import io.github.krzkawa.bambuddyaio.nfc.OpenSpool
 import io.github.krzkawa.bambuddyaio.util.bool
 import io.github.krzkawa.bambuddyaio.util.dbl
 import io.github.krzkawa.bambuddyaio.util.int
@@ -173,4 +174,110 @@ object Spools {
             val count = loc.int("spool_count") ?: 0
             name to if (count > 0) "$name  ($count)" else name
         }
+
+    // ----------------------------------------------------------- running low
+
+    /** Bambuddy's own default for `low_stock_threshold`, used when settings cannot be read. */
+    const val DEFAULT_LOW_PERCENT = 20.0
+
+    /** Per cent of the spool still on it, 0 to 100. */
+    fun percentLeft(spool: JSONObject): Double {
+        val label = labelWeight(spool)
+        if (label <= 0) return 0.0
+        return gramsLeft(spool) / label * 100.0
+    }
+
+    /**
+     * Low by the same rule Bambuddy's inventory page uses: under the spool's own
+     * `low_stock_threshold_pct` when it has one, the server-wide threshold otherwise.
+     * Archived spools are never low; they are not on the shelf.
+     */
+    fun isLow(spool: JSONObject, globalPercent: Double): Boolean {
+        if (isArchived(spool)) return false
+        val threshold = spool.dbl("low_stock_threshold_pct") ?: globalPercent
+        return percentLeft(spool) < threshold
+    }
+
+    /** The spools that are running low, emptiest first. */
+    fun lowList(spools: List<JSONObject>, globalPercent: Double): List<JSONObject> =
+        spools.filter { isLow(it, globalPercent) }.sortedBy { percentLeft(it) }
+
+    /**
+     * What identifies a filament you would buy again: material, variant, brand and colour,
+     * ignoring case. Two rolls of the same Bambu PLA Basic Black are one line to buy.
+     */
+    private fun buyKey(material: String?, subtype: String?, brand: String?, colour: String?): String =
+        listOf(material, subtype, brand, colour).joinToString("|") { it?.trim()?.lowercase().orEmpty() }
+
+    /** True when this spool's filament is already on the list and not yet received. */
+    fun onShoppingList(spool: JSONObject, items: List<JSONObject>): Boolean {
+        val key = buyKey(spool.str("material"), spool.str("subtype"), spool.str("brand"), spool.str("color_name"))
+        return items.any {
+            it.str("status") != "received" &&
+                buyKey(it.str("material"), it.str("subtype"), it.str("brand"), it.str("color_name")) == key
+        }
+    }
+
+    /** The body of `POST /inventory/shopping-list` for another roll of this spool. */
+    fun shoppingItem(spool: JSONObject): JSONObject {
+        val item = JSONObject()
+            .put("material", spool.str("material") ?: "Filament")
+            .put("quantity_spools", 1)
+        spool.str("subtype")?.let { item.put("subtype", it) }
+        spool.str("brand")?.let { item.put("brand", it) }
+        spool.str("color_name")?.let { item.put("color_name", it) }
+        return item
+    }
+
+    /** "2 × Bambu · PLA Basic · Black" for one shopping-list line. */
+    fun shoppingLine(item: JSONObject): String {
+        val name = listOfNotNull(
+            item.str("brand"),
+            item.str("subtype")?.let { sub ->
+                val material = item.str("material")
+                if (material != null && !sub.startsWith(material, ignoreCase = true)) "$material $sub" else sub
+            } ?: item.str("material"),
+            item.str("color_name")
+        ).joinToString(" · ").ifBlank { "Filament" }
+        val count = item.int("quantity_spools") ?: 1
+        return if (count > 1) "$count × $name" else name
+    }
+
+    /** The next step for a shopping item, as (status to send, button label), or null once received. */
+    fun nextShoppingStep(item: JSONObject): Pair<String, String>? = when (item.str("status") ?: "pending") {
+        "pending" -> "purchased" to "Bought"
+        "purchased" -> "received" to "Arrived"
+        else -> null
+    }
+
+    fun shoppingStatusWord(item: JSONObject): String = when (item.str("status") ?: "pending") {
+        "purchased" -> "Ordered"
+        "received" -> "Arrived"
+        else -> "To buy"
+    }
+
+    // --------------------------------------------------------------- sticker
+
+    /**
+     * The OpenSpool record for a sticker on this spool.
+     *
+     * Colour and material come from the spool; temperatures from the spool when it has
+     * them and from the material's usual range when it does not, so a sticker never goes
+     * out without them. Text is trimmed to lengths that keep the record inside an
+     * NTAG215 with a wide margin.
+     */
+    fun stickerRecord(spool: JSONObject): OpenSpool.Record {
+        val material = spool.str("material") ?: "PLA"
+        val defaults = OpenSpool.defaultTemps(material)
+        val colour = spool.str("rgba")?.removePrefix("#")?.take(6)?.uppercase()
+            ?.takeIf { it.length == 6 && it.all { c -> c in '0'..'9' || c in 'A'..'F' } }
+            ?: "FFFFFF"
+        return OpenSpool.Record(
+            type = material.take(24),
+            colorHex = colour,
+            brand = (spool.str("brand") ?: "Generic").take(32),
+            minTemp = spool.int("nozzle_temp_min")?.takeIf { it > 0 } ?: defaults?.first,
+            maxTemp = spool.int("nozzle_temp_max")?.takeIf { it > 0 } ?: defaults?.second
+        )
+    }
 }

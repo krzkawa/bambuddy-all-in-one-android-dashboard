@@ -100,6 +100,24 @@ class Shots {
                 .put("filament_short", true))
             .put(JSONObject().put("id", 14).put("status", "completed")
                 .put("archive_name", "old_and_done.3mf").put("printer_id", 1))
+        fun spool(id: Int, brand: String, material: String, sub: String?, colour: String, rgba: String,
+                  left: Int, location: String? = null) = JSONObject()
+            .put("id", id).put("brand", brand).put("material", material).put("subtype", sub)
+            .put("color_name", colour).put("rgba", rgba).put("label_weight", 1000)
+            .put("weight_used", 1000 - left).put("storage_location", location)
+        val spools = JSONArray()
+            .put(spool(1, "Bambu", "PLA", "Basic", "Jade White", "F5F5F5FF", 820, "Drybox 1"))
+            .put(spool(2, "Polymaker", "PETG", null, "Blue", "1E88E5FF", 410, "Drybox 1"))
+            .put(spool(3, "Bambu", "PLA", "Basic", "Red", "E53935FF", 70, "Shelf"))
+            .put(spool(4, "eSun", "PLA+", null, "Black", "212121FF", 150))
+            .put(spool(5, "Bambu", "ABS", null, "Orange", "FB8C00FF", 960, "Drybox 2"))
+        val shopping = JSONArray()
+            .put(JSONObject().put("id", 1).put("material", "PLA").put("subtype", "Basic").put("brand", "Bambu")
+                .put("color_name", "Red").put("quantity_spools", 2).put("status", "pending")
+                .put("added_at", "2026-09-22T08:00:00"))
+            .put(JSONObject().put("id", 2).put("material", "PETG").put("brand", "Polymaker")
+                .put("color_name", "Blue").put("quantity_spools", 1).put("status", "purchased")
+                .put("added_at", "2026-09-18T08:00:00"))
         // A bare socket rather than com.sun.net.httpserver, which the android.jar
         // these tests compile against does not carry.
         val socket = java.net.ServerSocket(0, 4, java.net.InetAddress.getLoopbackAddress())
@@ -115,6 +133,9 @@ class Shots {
                         }
                         val body = when {
                             request.contains("queue") -> queue.toString()
+                            request.contains("shopping-list") -> shopping.toString()
+                            request.contains("inventory/spools") -> spools.toString()
+                            request.contains("settings") -> JSONObject().put("low_stock_threshold", 20).toString()
                             request.contains("ams-history") -> amsHistory().toString()
                             request.contains("printer-sensor-history") -> heaterHistory().toString()
                             request.contains("archives/stats") -> stats().toString()
@@ -350,6 +371,40 @@ class Shots {
         activity.showTab(1)
         shadowOf(Looper.getMainLooper()).idle()
         captureFull(activity.window.decorView, File(out, "control-full.png"))
+        shootSpools(activity, out)
+    }
+
+
+    /** The Spools screen in each of its views, and the sticker sheet over it. */
+    private fun shootSpools(activity: MainActivity, out: File) {
+        activity.showTab(5)
+        shadowOf(Looper.getMainLooper()).idle()
+        Thread.sleep(600)
+        shadowOf(Looper.getMainLooper()).idle()
+        val fragment = activity.supportFragmentManager.fragments
+            .first { it is io.github.krzkawa.bambuddyaio.ui.SpoolsFragment }
+        val viewField = fragment.javaClass.getDeclaredField("view").apply { isAccessible = true }
+        val render = fragment.javaClass.getDeclaredMethod("render").apply { isAccessible = true }
+        listOf(0 to "spools", 1 to "spools-low", 2 to "spools-to-buy").forEach { (mode, name) ->
+            viewField.setInt(fragment, mode)
+            render.invoke(fragment)
+            shadowOf(Looper.getMainLooper()).idle()
+            capture(activity.window.decorView, File(out, "$name.png"))
+        }
+
+        val spool = JSONObject().put("id", 4).put("brand", "eSun").put("material", "PLA+")
+            .put("color_name", "Black").put("rgba", "212121FF")
+        io.github.krzkawa.bambuddyaio.ui.StickerWrite.show(activity, fragment.viewLifecycleOwner, spool)
+        shadowOf(Looper.getMainLooper()).idle()
+        val dialog = org.robolectric.shadows.ShadowDialog.getLatestDialog()
+        capture(dialog.window!!.decorView, File(out, "sticker-sheet.png"))
+        io.github.krzkawa.bambuddyaio.ui.StickerWrite.arm(
+            io.github.krzkawa.bambuddyaio.ui.StickerWrite.Request(4, "eSun · PLA+ · Black", "{}")
+        )
+        shadowOf(Looper.getMainLooper()).idle()
+        capture(dialog.window!!.decorView, File(out, "sticker-waiting.png"))
+        dialog.dismiss()
+        shadowOf(Looper.getMainLooper()).idle()
     }
 
     private fun scrollToEnd(view: View) {

@@ -272,6 +272,11 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
 
     /** Called on a binder thread by the NFC stack, never on the main thread. */
     override fun onTagDiscovered(tag: Tag) {
+        // A sticker write is waiting for this tag: write it, and do not scan it.
+        if (StickerWrite.armed) {
+            lifecycleScope.launch { StickerWrite.handle(tag, applicationContext) }
+            return
+        }
         ScanState.reading()
         lifecycleScope.launch {
             // Passing the context lets the reader tell "this phone cannot do

@@ -359,6 +359,43 @@ class Api(private val prefs: Prefs) {
         delete("inventory/assignments/$printerId/$amsId/$trayId")
     }
 
+    /**
+     * Links a sticker this app just wrote to a spool, marking the link as an OpenSpool
+     * tag the way a scanned OpenSpool spool is created. Only `tag_uid` is sent, so a
+     * Bambu `tray_uuid` already on the spool stays where it is.
+     */
+    fun linkWrittenTag(spoolId: Int, tagUid: String): JSONObject =
+        patchObject(
+            "inventory/spools/$spoolId/link-tag",
+            JSONObject().put("tag_uid", tagUid).put("tag_type", "openspool")
+        )
+
+    /**
+     * Makes an inventory spool out of what the AMS reports in a slot, and assigns it
+     * there in the same call. The server only does this for a slot whose spool has an
+     * RFID tag (`inventory.py:2595`) and answers 400 otherwise, because a spool with no
+     * tag has nothing to be found by next time.
+     */
+    fun spoolFromSlot(printerId: Int, amsId: Int, trayId: Int): JSONObject =
+        postObject(
+            "inventory/spools/from-slot",
+            JSONObject().put("printer_id", printerId).put("ams_id", amsId).put("tray_id", trayId)
+        )
+
+    /** Bambuddy's filament shopping list, newest first. */
+    fun shoppingList(): JSONArray = getArray("inventory/shopping-list")
+
+    fun addToShoppingList(item: JSONObject): JSONObject = postObject("inventory/shopping-list", item)
+
+    /** One of `pending`, `purchased`, `received`. */
+    fun setShoppingStatus(itemId: Int, status: String): JSONObject =
+        patchObject("inventory/shopping-list/$itemId/status", JSONObject().put("status", status))
+
+    fun removeFromShoppingList(itemId: Int) { delete("inventory/shopping-list/$itemId") }
+
+    /** The server-wide settings; the running-low list reads `low_stock_threshold` from it. */
+    fun settings(): JSONObject = getObject("settings/")
+
     // ------------------------------------------------------- queue / archives
 
     fun queue(status: String? = null): JSONArray = getArray("queue/", "status" to status)

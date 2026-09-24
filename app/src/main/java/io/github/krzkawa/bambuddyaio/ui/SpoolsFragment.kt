@@ -10,18 +10,25 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import io.github.krzkawa.bambuddyaio.net.Repo
+import io.github.krzkawa.bambuddyaio.util.dbl
 import io.github.krzkawa.bambuddyaio.util.objects
 import io.github.krzkawa.bambuddyaio.util.str
 import org.json.JSONObject
 
-/** The filament inventory: what he has, what is left of it, and where it lives. */
+/**
+ * The filament inventory: what he has, what is left of it, and where it lives —
+ * and, one segment over, what is running out and what is on order.
+ */
 class SpoolsFragment : BaseFragment() {
 
+    private lateinit var views: LinearLayout
     private lateinit var list: LinearLayout
-    private lateinit var archivedToggle: TextView
     private var spools: List<JSONObject> = emptyList()
+    private var shopping: List<JSONObject> = emptyList()
+    private var lowPercent = Spools.DEFAULT_LOW_PERCENT
     private var filter = ""
-    private var showArchived = false
+    private var view = ALL
+    private var loaded = false
 
     override fun build(ctx: Context) {
         screenAction("Reload") { load() }
@@ -38,13 +45,9 @@ class SpoolsFragment : BaseFragment() {
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
         })
         top.addView(search, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        top.addView(Ui.space(ctx, 1), Ui.lp(ctx, 8, 1))
-        archivedToggle = Ui.button(ctx, archivedLabel(), primary = showArchived) {
-            showArchived = !showArchived
-            archivedToggle.text = archivedLabel()
-            load()
-        }
-        top.addView(archivedToggle)
+        Ui.gap(ctx, top, Ui.S)
+        views = Ui.row(ctx)
+        top.addView(views)
         content.addView(top, Ui.wide(ctx))
         content.addView(Ui.space(ctx, Ui.M))
 
@@ -53,14 +56,54 @@ class SpoolsFragment : BaseFragment() {
         load()
     }
 
-    private fun archivedLabel() = if (showArchived) "Hide archived" else "Archived"
+    /** One strip picks the view; the counts on it say whether a view is worth opening. */
+    private fun buildViews(ctx: Context) {
+        views.removeAllViews()
+        val active = spools.filter { !Spools.isArchived(it) }
+        val low = Spools.lowList(active, lowPercent).size
+        val toBuy = shopping.count { it.str("status") != "received" }
+        val labels = listOf(
+            if (loaded && view != ARCHIVED) "All ${active.size}" else "All",
+            if (low > 0) "Running low $low" else "Running low",
+            if (toBuy > 0) "To buy $toBuy" else "To buy",
+            "Archived"
+        )
+        views.addView(Ui.segmented(ctx, labels, view) { picked ->
+            if (picked == view) return@segmented
+            // Archived spools come from a different request; the other three share one.
+            val refetch = picked == ARCHIVED || view == ARCHIVED
+            view = picked
+            if (refetch) load() else render()
+        })
+    }
 
     private fun load() {
         list.removeAllViews()
         context?.let { list.addView(Ui.dim(it, "Loading…")) }
-        val includeArchived = showArchived
-        background({ Repo.api.spools(includeArchived) }) { result ->
-            result.onSuccess { spools = it.objects() }
+        loaded = false
+        val archived = view == ARCHIVED
+        background({
+            val all = Repo.api.spools(archived).objects()
+            // The list and the threshold are extras: a server that will not give them
+            // (an API key without those permissions) still shows its spools.
+            val items = if (archived) shopping else try {
+                Repo.api.shoppingList().objects()
+            } catch (e: Exception) {
+                emptyList()
+            }
+            val threshold = try {
+                Repo.api.settings().dbl("low_stock_threshold") ?: Spools.DEFAULT_LOW_PERCENT
+            } catch (e: Exception) {
+                lowPercent
+            }
+            Triple(all, items, threshold)
+        }) { result ->
+            result.onSuccess { (all, items, threshold) ->
+                spools = if (archived) all.filter { Spools.isArchived(it) } else all
+                shopping = items
+                lowPercent = threshold
+                loaded = true
+            }
             result.onFailure {
                 spools = emptyList()
                 toast(it.message ?: "Could not load your spools")
@@ -71,27 +114,95 @@ class SpoolsFragment : BaseFragment() {
 
     private fun render() {
         val ctx = context ?: return
+        buildViews(ctx)
         list.removeAllViews()
+        when (view) {
+            LOW -> renderLow(ctx)
+            TO_BUY -> renderShopping(ctx)
+            else -> renderAll(ctx)
+        }
+    }
 
+    private fun renderAll(ctx: Context) {
         val shown = spools.filter { Spools.matches(it, filter) }
 
+        val head = Ui.row(ctx)
+        head.addView(Ui.tiny(ctx, when {
+            spools.isEmpty() -> ""
+            shown.size == spools.size -> "${spools.size} spools"
+            else -> "${shown.size} of ${spools.size} spools"
+        }))
+        Ui.push(ctx, head)
+        if (view == ALL) head.addView(Ui.quiet(ctx, "Add from a slot") { addFromSlot(ctx) })
+        list.addView(head, Ui.wide(ctx))
+        list.addView(Ui.space(ctx, Ui.XS))
+
         if (shown.isEmpty()) {
-            list.addView(empty(ctx, if (spools.isEmpty()) "No spools yet." else "Nothing matches that."))
+            list.addView(empty(ctx, when {
+                spools.isNotEmpty() -> "Nothing matches that."
+                view == ARCHIVED -> "Nothing is archived."
+                else -> "No spools yet."
+            }))
             return
         }
-
-        val count = Ui.tiny(ctx, if (shown.size == spools.size) "${spools.size} spools"
-            else "${shown.size} of ${spools.size} spools")
-        list.addView(count)
-        list.addView(Ui.space(ctx, Ui.S))
-
         for (spool in shown) {
-            list.addView(row(ctx, spool), Ui.wide(ctx))
+            val trailing = if (Spools.isArchived(spool)) Ui.quiet(ctx, "Restore") { restore(spool) }
+            else Ui.button(ctx, "Assign") { assign(ctx, spool) }
+            list.addView(row(ctx, spool, Spools.summary(spool), trailing), Ui.wide(ctx))
             list.addView(Ui.space(ctx, 6))
         }
     }
 
-    private fun row(ctx: Context, spool: JSONObject): LinearLayout {
+    /** The spools under their threshold, emptiest first, each one tap from the shopping list. */
+    private fun renderLow(ctx: Context) {
+        val low = Spools.lowList(spools, lowPercent).filter { Spools.matches(it, filter) }
+        list.addView(Ui.tiny(ctx, "Under ${Math.round(lowPercent)}% left, or under a spool's own limit."))
+        list.addView(Ui.space(ctx, Ui.S))
+        if (low.isEmpty()) {
+            list.addView(empty(ctx, if (spools.isEmpty()) "No spools yet." else "Nothing is running low."))
+            return
+        }
+        for (spool in low) {
+            val line = "${Spools.grams(Spools.gramsLeft(spool))} left · ${Math.round(Spools.percentLeft(spool))}%" +
+                (spool.str("storage_location")?.let { " · $it" } ?: "")
+            val trailing = if (Spools.onShoppingList(spool, shopping)) Ui.tiny(ctx, "On the list")
+            else Ui.button(ctx, "Add to list") { addToShopping(spool) }
+            list.addView(row(ctx, spool, line, trailing), Ui.wide(ctx))
+            list.addView(Ui.space(ctx, 6))
+        }
+    }
+
+    /** Bambuddy's shopping list, moved along as rolls are ordered and arrive. */
+    private fun renderShopping(ctx: Context) {
+        val terms = filter.trim().lowercase()
+        val items = shopping.filter { terms.isBlank() || Spools.shoppingLine(it).lowercase().contains(terms) }
+        if (items.isEmpty()) {
+            list.addView(empty(ctx, if (shopping.isEmpty()) "The shopping list is empty. Add to it from Running low."
+                else "Nothing matches that."))
+            return
+        }
+        for (item in items) {
+            val card = Ui.inset(ctx)
+            val info = Ui.col(ctx)
+            info.addView(Ui.body(ctx, Spools.shoppingLine(item)))
+            val bits = listOfNotNull(
+                Spools.shoppingStatusWord(item),
+                Spools.shortDate(item.str("added_at")).takeIf { it.isNotBlank() }?.let { "added $it" },
+                item.str("note")
+            )
+            info.addView(Ui.tiny(ctx, bits.joinToString(" · ")))
+            card.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            card.addView(Ui.quiet(ctx, "Remove") { removeShopping(item) })
+            Spools.nextShoppingStep(item)?.let { (status, label) ->
+                Ui.gap(ctx, card, Ui.XS)
+                card.addView(Ui.button(ctx, label) { moveShopping(item, status) })
+            }
+            list.addView(card, Ui.wide(ctx))
+            list.addView(Ui.space(ctx, 6))
+        }
+    }
+
+    private fun row(ctx: Context, spool: JSONObject, summary: String, trailing: View): LinearLayout {
         // A spool is a list row, not a panel: forty panels down a screen is
         // forty boxes and no list.
         val card = Ui.inset(ctx)
@@ -104,14 +215,9 @@ class SpoolsFragment : BaseFragment() {
 
         val info = Ui.col(ctx)
         info.addView(Ui.body(ctx, Assign.spoolName(spool)))
-        info.addView(Ui.tiny(ctx, Spools.summary(spool)))
+        info.addView(Ui.tiny(ctx, summary))
         line.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
-        if (Spools.isArchived(spool)) {
-            line.addView(Ui.quiet(ctx, "Restore") { restore(spool) })
-        } else {
-            line.addView(Ui.button(ctx, "Assign") { assign(ctx, spool) })
-        }
+        line.addView(trailing)
         card.addView(line, Ui.wide(ctx))
         // Tapping the card opens the spool. A separate edit button would cost
         // width this screen has none of, and the card is a far bigger target on
@@ -129,6 +235,147 @@ class SpoolsFragment : BaseFragment() {
         }
         Assign.pickSlot(ctx, printerId) { slot ->
             Assign.send(spool.optInt("id"), printerId, slot) { toast(it) }
+        }
+    }
+
+    // ------------------------------------------------------------ shopping
+
+    private fun addToShopping(spool: JSONObject) {
+        background({ Repo.api.addToShoppingList(Spools.shoppingItem(spool)) }) { result ->
+            result.onSuccess {
+                shopping = listOf(it) + shopping
+                toast("On the shopping list")
+                render()
+            }
+            result.onFailure { toast(it.message ?: "Could not add it to the list") }
+        }
+    }
+
+    private fun moveShopping(item: JSONObject, status: String) {
+        background({ Repo.api.setShoppingStatus(item.optInt("id"), status) }) { result ->
+            result.onSuccess { updated ->
+                shopping = shopping.map { if (it.optInt("id") == updated.optInt("id")) updated else it }
+                render()
+            }
+            result.onFailure { toast(it.message ?: "Could not update the list") }
+        }
+    }
+
+    private fun removeShopping(item: JSONObject) {
+        background({ Repo.api.removeFromShoppingList(item.optInt("id")) }) { result ->
+            result.onSuccess {
+                shopping = shopping.filter { it.optInt("id") != item.optInt("id") }
+                render()
+            }
+            result.onFailure { toast(it.message ?: "Could not remove it") }
+        }
+    }
+
+    // ------------------------------------------------------------ from a slot
+
+    /**
+     * Makes an inventory spool out of whatever the AMS reports in a slot — for a spool
+     * that was loaded without ever being scanned.
+     */
+    private fun addFromSlot(ctx: Context) {
+        val printerId = Repo.selected.value
+        if (printerId < 0) {
+            toast("Choose a printer on the Printers screen first")
+            return
+        }
+        val slots = Assign.slotsFor(printerId).filter { it.occupant != null }
+        if (slots.isEmpty()) {
+            toast("No slot on ${Repo.printerName(printerId)} is reporting a filament")
+            return
+        }
+        val labels = slots.map { "${it.label}  —  ${it.occupant}" }.toTypedArray()
+        AlertDialog.Builder(ctx)
+            .setTitle("Which slot?")
+            .setItems(labels) { _, which -> checkSlot(ctx, printerId, slots[which]) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Looks for the slot's spool in the inventory before offering to add it. */
+    private fun checkSlot(ctx: Context, printerId: Int, slot: Assign.Slot) {
+        val tray = SlotSpool.tray(Repo.statuses.value[printerId], slot.amsId, slot.trayId)
+        if (tray == null || !SlotSpool.hasFilament(tray)) {
+            toast("${slot.label} is not reporting a filament")
+            return
+        }
+        val tagged = SlotSpool.hasTag(tray)
+        background({
+            val byTag = if (tagged) Repo.api.spoolByTag(tray.str("tray_uuid"), tray.str("tag_uid")) else null
+            byTag ?: SlotSpool.assignedSpool(Repo.api.assignments().objects(), printerId, slot.amsId, slot.trayId)
+        }) { result ->
+            result.onFailure { toast(it.message ?: "Could not check your inventory") }
+            result.onSuccess { existing ->
+                if (existing != null) alreadyThere(ctx, existing, slot)
+                else confirmFromSlot(ctx, printerId, slot, tray, tagged)
+            }
+        }
+    }
+
+    private fun alreadyThere(ctx: Context, spool: JSONObject, slot: Assign.Slot) {
+        val chipless = spool.str("tag_uid") == null && spool.str("tray_uuid") == null
+        val builder = AlertDialog.Builder(ctx)
+            .setTitle("Already in your inventory")
+            .setMessage("${slot.label} holds ${Assign.spoolName(spool)}, which Bambuddy already has." +
+                if (chipless) " It has no tag; a sticker would make it scannable." else "")
+            .setNegativeButton("Close", null)
+        if (chipless && !Spools.isArchived(spool)) {
+            builder.setPositiveButton("Write a sticker") { _, _ -> StickerWrite.show(ctx, viewLifecycleOwner, spool) }
+        }
+        builder.show()
+    }
+
+    private fun confirmFromSlot(ctx: Context, printerId: Int, slot: Assign.Slot, tray: JSONObject, tagged: Boolean) {
+        val what = SlotSpool.describe(tray)
+        val message = if (tagged) {
+            "Adds $what from its tag, the way Bambuddy adds a spool it recognises, and assigns it to ${slot.label}."
+        } else {
+            "The spool has no tag, so it is added from what the AMS says: $what. " +
+                "It is assigned to ${slot.label}, and you can write a sticker for it next."
+        }
+        AlertDialog.Builder(ctx)
+            .setTitle("Add ${slot.label} to your inventory?")
+            .setMessage(message)
+            .setPositiveButton("Add it") { _, _ -> createFromSlot(ctx, printerId, slot, tray, tagged) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun createFromSlot(ctx: Context, printerId: Int, slot: Assign.Slot, tray: JSONObject, tagged: Boolean) {
+        background({
+            if (tagged) {
+                Repo.api.spoolFromSlot(printerId, slot.amsId, slot.trayId)
+            } else {
+                val created = Repo.api.createSpool(SlotSpool.payload(tray))
+                Repo.api.assign(created.optInt("id"), printerId, slot.amsId, slot.trayId)
+                created
+            }
+        }) { result ->
+            result.onFailure {
+                toast(it.message ?: "Could not add the spool")
+                // The spool may have been made before the assignment failed.
+                load()
+            }
+            result.onSuccess { spool ->
+                load()
+                if (tagged) {
+                    toast("Added and assigned to ${slot.label}")
+                } else {
+                    AlertDialog.Builder(ctx)
+                        .setTitle("Added")
+                        .setMessage("${Assign.spoolName(spool)} is in your inventory and assigned to " +
+                            "${slot.label}. Write a sticker so it scans next time?")
+                        .setPositiveButton("Write a sticker") { _, _ ->
+                            StickerWrite.show(ctx, viewLifecycleOwner, spool)
+                        }
+                        .setNegativeButton("Not now", null)
+                        .show()
+                }
+            }
         }
     }
 
@@ -235,6 +482,13 @@ class SpoolsFragment : BaseFragment() {
             dialog?.dismiss()
             confirmZeroCounter(ctx, spool)
         })
+        if (!Spools.isArchived(spool)) {
+            more.addView(Ui.space(ctx, 1), Ui.lp(ctx, 6, 1))
+            more.addView(Ui.button(ctx, "Write a sticker") {
+                dialog?.dismiss()
+                StickerWrite.show(ctx, viewLifecycleOwner, spool)
+            })
+        }
         root.addView(more, Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         root.addView(Ui.space(ctx, 8))
         root.addView(Ui.tiny(ctx, "Consumed so far: ${Spools.grams(Spools.consumed(spool))}"))
@@ -347,5 +601,12 @@ class SpoolsFragment : BaseFragment() {
             result.onSuccess { toast(success); load() }
             result.onFailure { toast(it.message ?: "Could not save the spool") }
         }
+    }
+
+    companion object {
+        private const val ALL = 0
+        private const val LOW = 1
+        private const val TO_BUY = 2
+        private const val ARCHIVED = 3
     }
 }
