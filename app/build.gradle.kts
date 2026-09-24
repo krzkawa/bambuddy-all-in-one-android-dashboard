@@ -2,6 +2,8 @@
 // it is running. A build from a laptop is always "dev".
 val buildNumber = (findProperty("buildNumber") as String?)?.toIntOrNull() ?: 1
 val buildSha = (findProperty("buildSha") as String?).orEmpty().take(7)
+// Set on a pull request's build, so a preview APK says which pull request it is.
+val buildPr = (findProperty("buildPr") as String?)?.toIntOrNull()
 
 plugins {
     id("com.android.application")
@@ -18,7 +20,11 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = buildNumber
-        versionName = if (buildSha.isBlank()) "dev" else "0.1.$buildNumber ($buildSha)"
+        versionName = when {
+            buildSha.isBlank() -> "dev"
+            buildPr != null -> "0.1.$buildNumber ($buildSha, PR #$buildPr)"
+            else -> "0.1.$buildNumber ($buildSha)"
+        }
         resourceConfigurations += listOf("en")
     }
 
@@ -88,5 +94,7 @@ dependencies {
     testImplementation("org.json:json:20231013")
     if (project.hasProperty("shots")) {
         testImplementation("org.robolectric:robolectric:4.14.1")
+        // A stand-in Bambuddy for LiveCheck, which drives the real socket code.
+        testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     }
 }

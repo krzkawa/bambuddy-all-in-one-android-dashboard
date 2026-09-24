@@ -165,6 +165,15 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("poll", 4).coerceIn(2, 60)
         set(v) = sp.edit().putInt("poll", v.coerceIn(2, 60)).apply()
 
+    /**
+     * Listens on Bambuddy's WebSocket so a change shows within a second, with
+     * the poll slowed to a heartbeat while the socket holds. Off by default:
+     * polling alone is what has been proven on this phone's wifi.
+     */
+    var liveUpdates: Boolean
+        get() = sp.getBoolean("liveUpdates", false)
+        set(v) = sp.edit().putBoolean("liveUpdates", v).apply()
+
     /** Last printer the user looked at, so the app comes back where they left it. */
     var lastPrinterId: Int
         get() = sp.getInt("lastPrinter", -1)

@@ -4,7 +4,9 @@ import android.content.Intent
 import android.content.Context
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
+import io.github.krzkawa.bambuddyaio.net.Live
 import io.github.krzkawa.bambuddyaio.net.Repo
 import io.github.krzkawa.bambuddyaio.util.str
 
@@ -12,11 +14,13 @@ import io.github.krzkawa.bambuddyaio.util.str
 class SettingsFragment : BaseFragment() {
 
     private lateinit var body: LinearLayout
+    private var liveLine: TextView? = null
 
     override fun build(ctx: Context) {
         body = Ui.col(ctx)
         content.addView(body, Ui.wide(ctx))
         render()
+        observe(Repo.live) { showLive() }
     }
 
     private fun render() {
@@ -110,8 +114,28 @@ class SettingsFragment : BaseFragment() {
             }
         )
         refresh.addView(refreshRow, wide(ctx))
+        refresh.addView(Ui.space(ctx, Ui.S))
+        refresh.addView(Ui.divider(ctx))
+        refresh.addView(
+            toggle(
+                ctx, "Live updates",
+                "The server says the moment something changes, instead of the phone asking. " +
+                    "If that connection drops, the phone goes back to asking.",
+                prefs.liveUpdates
+            ) {
+                Repo.setLiveUpdates(!prefs.liveUpdates)
+                render()
+            },
+            wide(ctx)
+        )
+        val line = Ui.tiny(ctx, "")
+        liveLine = line
+        refresh.addView(line, wide(ctx))
+        showLive()
         body.addView(refresh)
         body.addView(Ui.space(ctx, Ui.M))
+
+        addApplianceCards(ctx, body) { render() }
 
         val about = Ui.card(ctx)
         about.addView(Ui.heading(ctx, "Versions"))
@@ -128,6 +152,24 @@ class SettingsFragment : BaseFragment() {
             result.onFailure { details.text = it.message ?: "Could not read the server details" }
         }
         body.addView(about)
+    }
+
+    /** Whether the socket is actually carrying the updates, since a setting alone does not say. */
+    private fun showLive() {
+        val line = liveLine ?: return
+        val ctx = context ?: return
+        val on = Repo.prefs.liveUpdates
+        line.visibility = if (on) android.view.View.VISIBLE else android.view.View.GONE
+        if (!on) return
+        val (text, colour) = when (Repo.live.value) {
+            Live.State.LIVE -> "Connected. Still checking in every ${maxOf(Repo.prefs.pollSeconds, 30)}s." to Ui.good(ctx)
+            Live.State.CONNECTING -> "Connecting…" to Ui.dimColor(ctx)
+            Live.State.RETRYING ->
+                "Not connected — asking every ${Repo.prefs.pollSeconds}s until it is back." to Ui.warn(ctx)
+            Live.State.OFF -> "Starts when the dashboard is on screen." to Ui.dimColor(ctx)
+        }
+        line.text = text
+        line.setTextColor(colour)
     }
 
     /**

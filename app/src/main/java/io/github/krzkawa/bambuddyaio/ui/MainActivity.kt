@@ -6,6 +6,7 @@ import android.nfc.Tag
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -23,6 +24,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import io.github.krzkawa.bambuddyaio.R
+import io.github.krzkawa.bambuddyaio.appliance.Alerts
 import io.github.krzkawa.bambuddyaio.nfc.BambuTag
 import io.github.krzkawa.bambuddyaio.net.Repo
 import io.github.krzkawa.bambuddyaio.util.ago
@@ -83,6 +85,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
         applyFullScreen()
         setContentView(buildLayout())
         nfc = NfcAdapter.getDefaultAdapter(this)
+        Alerts.attach(this)
 
         showTab(if (savedInstanceState != null) savedInstanceState.getInt(KEY_TAB, 0) else 0)
 
@@ -112,6 +115,9 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
                 val error = Repo.error.value.orEmpty()
                 (if (age == null) error else "$error · last update ${ago(age)}") to Ui.bad(this)
             }
+            // Read back from disk at startup, and the first poll is still out.
+            Repo.restored.value && age != null ->
+                "Connecting — last update ${ago(age)}" to Ui.dimColor(this)
             age != null && age > Repo.staleAfterMs() ->
                 "Not live — last update ${ago(age)}" to Ui.warn(this)
             notice != null ->
@@ -177,6 +183,12 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
             }
             refreshStatusLine()
         }
+    }
+
+    /** A touch on a dimmed screen only wakes it; see [io.github.krzkawa.bambuddyaio.appliance.Night]. */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (Alerts.onTouch(ev)) return true
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -260,6 +272,11 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
 
     /** Called on a binder thread by the NFC stack, never on the main thread. */
     override fun onTagDiscovered(tag: Tag) {
+        // A sticker write is waiting for this tag: write it, and do not scan it.
+        if (StickerWrite.armed) {
+            lifecycleScope.launch { StickerWrite.handle(tag, applicationContext) }
+            return
+        }
         ScanState.reading()
         lifecycleScope.launch {
             // Passing the context lets the reader tell "this phone cannot do

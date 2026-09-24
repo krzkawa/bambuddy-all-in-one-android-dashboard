@@ -20,8 +20,8 @@ import org.json.JSONObject
  * Scan a spool's tag, then put it in a slot.
  *
  * The tag itself only identifies the filament; the assignment is Bambuddy's
- * record of which spool sits where, which is what the user asked for. Nothing
- * is ever written back to the tag.
+ * record of which spool sits where, which is what the user asked for. Scanning
+ * never writes to a tag; stickers are written from Spools, by [StickerWrite].
  */
 class ScanFragment : BaseFragment() {
 

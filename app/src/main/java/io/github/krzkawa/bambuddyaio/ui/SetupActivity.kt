@@ -13,8 +13,10 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import io.github.krzkawa.bambuddyaio.net.Api
 import io.github.krzkawa.bambuddyaio.net.ApiError
+import io.github.krzkawa.bambuddyaio.net.Finder
 import io.github.krzkawa.bambuddyaio.net.Repo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -38,6 +40,9 @@ class SetupActivity : AppCompatActivity() {
     private lateinit var passField: EditText
     private lateinit var message: TextView
     private lateinit var authNote: TextView
+    private lateinit var findLine: TextView
+    private lateinit var foundList: LinearLayout
+    private var finding: Job? = null
 
     /** The address the note on screen is about, so a re-check is skipped. */
     private var probed = ""
@@ -65,6 +70,15 @@ class SetupActivity : AppCompatActivity() {
         serverField = Ui.input(this, "http://192.168.1.50:8000", Repo.prefs.serverUrl)
         serverField.inputType = InputType.TYPE_TEXT_VARIATION_URI
         left.addView(serverField, wide())
+        left.addView(Ui.space(this, Ui.XS))
+        val finder = Ui.row(this)
+        finder.addView(Ui.quiet(this, "Find it") { find() })
+        Ui.gap(this, finder, Ui.S)
+        findLine = Ui.tiny(this, "Looks for Bambuddy on this phone's wifi.")
+        finder.addView(findLine, Ui.lp(this, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        left.addView(finder, wide())
+        foundList = Ui.col(this)
+        left.addView(foundList, wide())
         authNote = Ui.tiny(this, "")
         authNote.visibility = View.GONE
         left.addView(authNote, wide())
@@ -110,7 +124,7 @@ class SetupActivity : AppCompatActivity() {
 
         // A saved address means he is here to change something, so say what
         // that server wants without waiting for him to retype it.
-        if (Repo.prefs.serverUrl.isNotBlank()) checkWhatServerWants()
+        if (Repo.prefs.serverUrl.isNotBlank()) checkWhatServerWants() else find()
     }
 
     private fun wide(): LinearLayout.LayoutParams =
@@ -155,6 +169,59 @@ class SetupActivity : AppCompatActivity() {
                 say(outcome.removePrefix("err:"), error = true)
             }
         }
+    }
+
+    // ------------------------------------------------------- finding the server
+
+    /**
+     * Knocks on every address on the wifi for a Bambuddy. Runs by itself on a
+     * first launch, when the address box is empty; a few seconds, mostly spent
+     * waiting on addresses where nothing is.
+     */
+    private fun find() {
+        if (finding?.isActive == true) return
+        val self = Finder.localAddress()
+        findLine.setTextColor(Ui.dimColor(this))
+        if (self == null) {
+            findLine.text = "This phone is not on a wifi network."
+            return
+        }
+        val hosts = Finder.neighbours(self)
+        val network = self.hostAddress.orEmpty().substringBeforeLast('.') + ".x"
+        foundList.removeAllViews()
+        findLine.text = "Looking on $network…"
+
+        finding = lifecycleScope.launch {
+            val found = Finder.scan(hosts) {}
+            if (found.isEmpty()) {
+                findLine.text = "Nothing on $network answered as Bambuddy. Type its address instead."
+                return@launch
+            }
+            findLine.text = if (found.size == 1) "Found it:" else "Found ${found.size}. Tap the one to use:"
+            for (server in found) foundList.addView(foundRow(server), wide())
+            // One server and nothing typed: that is the answer, so use it.
+            if (found.size == 1 && serverField.text.isNullOrBlank()) use(found[0])
+        }
+    }
+
+    private fun foundRow(server: Finder.Found): LinearLayout {
+        val row = Ui.row(this)
+        row.setPadding(0, Ui.dp(this, Ui.XS), 0, 0)
+        row.addView(Ui.button(this, server.url.removePrefix("http://")) { use(server) })
+        Ui.gap(this, row, Ui.S)
+        val note = when {
+            server.needsSetup -> "Not set up yet"
+            server.authEnabled -> "Asks for a login"
+            else -> "No login needed"
+        }
+        row.addView(Ui.tiny(this, note))
+        return row
+    }
+
+    private fun use(server: Finder.Found) {
+        serverField.setText(server.url)
+        serverField.setSelection(server.url.length)
+        checkWhatServerWants()
     }
 
     // ----------------------------------------------------- what this server wants
