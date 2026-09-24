@@ -374,6 +374,90 @@ class Api(private val prefs: Prefs) {
     fun queueStart(itemId: Int, skipFilamentCheck: Boolean = false): JSONObject =
         postObject("queue/$itemId/start", null, "skip_filament_check" to skipFilamentCheck)
 
+    // ------------------------------------------------- printing from the phone
+
+    /**
+     * Puts a file or an old print in the queue. The only way left to start a
+     * print: `/library/files/{id}/print` and `/archives/{id}/reprint` now
+     * answer 410 and point here.
+     */
+    fun queueAdd(payload: JSONObject): JSONObject = postObject("queue/", payload)
+
+    /** Edits a pending item. The server applies exactly the keys sent, nulls included. */
+    fun queueUpdate(itemId: Int, payload: JSONObject): JSONObject =
+        patchObject("queue/$itemId", payload)
+
+    /**
+     * Renumbers pending items. Positions are per printer, and the server
+     * refuses a payload that gives two items the same one.
+     */
+    fun queueReorder(order: List<Pair<Int, Int>>) {
+        val items = JSONArray()
+        for ((id, position) in order) items.put(JSONObject().put("id", id).put("position", position))
+        post("queue/reorder", JSONObject().put("items", items))
+    }
+
+    /** Stops the print a queue item is running, and marks the item cancelled. */
+    fun queueStop(itemId: Int) { post("queue/$itemId/stop") }
+
+    /** Every folder, as a tree: each one carries its `children`. */
+    fun libraryFolders(): JSONArray = getArray("library/folders")
+
+    /** Files directly in [folderId], or at the top level when it is null. */
+    fun libraryFiles(folderId: Int?): JSONArray = getArray("library/files/", "folder_id" to folderId)
+
+    /** The plates in a 3MF, each with its own time, weight and filaments. */
+    fun libraryPlates(fileId: Int): JSONObject = getObject("library/files/$fileId/plates")
+
+    /** What one plate of a file needs loaded: slot, type, colour, grams. */
+    fun libraryFilaments(fileId: Int, plateId: Int?): JSONObject =
+        getObject("library/files/$fileId/filament-requirements", "plate_id" to plateId)
+
+    /**
+     * Archived prints, newest first, with their ids. The slim listing the
+     * History screen used to read has no id, so nothing on it could be opened.
+     */
+    fun archiveList(limit: Int = 40): JSONArray = getArray("archives/", "limit" to limit)
+
+    fun archive(archiveId: Int): JSONObject = getObject("archives/$archiveId")
+
+    fun archivePlates(archiveId: Int): JSONObject = getObject("archives/$archiveId/plates")
+
+    fun archiveFilaments(archiveId: Int, plateId: Int?): JSONObject =
+        getObject("archives/$archiveId/filament-requirements", "plate_id" to plateId)
+
+    /**
+     * Picture routes. Like the camera, they were built for browser `<img>`
+     * tags and take the stream token in the query string rather than a header.
+     */
+    fun libraryThumbUrl(fileId: Int, token: String?): HttpUrl =
+        url("library/files/$fileId/thumbnail", "token" to token?.ifBlank { null })
+
+    fun libraryPlateThumbUrl(fileId: Int, plate: Int, token: String?): HttpUrl =
+        url("library/files/$fileId/plate-thumbnail/$plate", "token" to token?.ifBlank { null })
+
+    fun archiveThumbUrl(archiveId: Int, token: String?): HttpUrl =
+        url("archives/$archiveId/thumbnail", "token" to token?.ifBlank { null })
+
+    fun archivePlateThumbUrl(archiveId: Int, plate: Int, token: String?): HttpUrl =
+        url("archives/$archiveId/plate-thumbnail/$plate", "token" to token?.ifBlank { null })
+
+    fun archivePhotoUrl(archiveId: Int, filename: String, token: String?): HttpUrl =
+        url("archives/$archiveId/photos/$filename", "token" to token?.ifBlank { null })
+
+    /** Raw bytes of a picture, with the usual auth headers alongside the token. */
+    fun bytes(url: HttpUrl): ByteArray {
+        val response: Response = try {
+            client.newCall(req(url).get().build()).execute()
+        } catch (e: IOException) {
+            throw ApiError(0, e.message ?: "Cannot reach the server")
+        }
+        response.use {
+            if (!it.isSuccessful) throw ApiError(it.code, "Server returned ${it.code}")
+            return it.body?.bytes() ?: ByteArray(0)
+        }
+    }
+
     /** The slim listing: one row per print run, which is all the history screen shows. */
     fun archives(limit: Int = 40): JSONArray = getArray("archives/slim", "limit" to limit)
 
