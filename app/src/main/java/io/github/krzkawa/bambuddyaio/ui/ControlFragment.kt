@@ -297,7 +297,11 @@ class ControlFragment : BaseFragment() {
 
     private fun tempSection(ctx: Context, id: Int, status: JSONObject): LinearLayout {
         val card = Ui.card(ctx)
-        card.addView(Ui.heading(ctx, "Temperatures"))
+        val heading = Ui.row(ctx)
+        heading.addView(Ui.heading(ctx, "Temperatures"))
+        Ui.push(ctx, heading)
+        heading.addView(Ui.quiet(ctx, "History") { HeaterHistory.show(this, id) })
+        card.addView(heading, Ui.wide(ctx))
 
         card.addView(heater(ctx, "Nozzle", "nozzle", Temps.NOZZLE_MAX) { target ->
             command("Nozzle ${target}°") { Repo.api.setNozzleTemp(id, target) }

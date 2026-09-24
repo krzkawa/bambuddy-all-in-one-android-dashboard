@@ -19,6 +19,9 @@ class AmsFragment : BaseFragment() {
     private lateinit var body: LinearLayout
     private var signature = ""
 
+    /** Each unit's humidity chart, kept across rebuilds so it is not fetched again. */
+    private val trends = HashMap<String, AmsTrend>()
+
     override fun build(ctx: Context) {
         picker = Ui.col(ctx)
         content.addView(picker, Ui.wide(ctx))
@@ -27,6 +30,9 @@ class AmsFragment : BaseFragment() {
 
         observe(Repo.statuses) { render() }
         observe(Repo.selected) { signature = ""; render() }
+        // The server records a point every five minutes; checking each minute
+        // keeps the chart's right edge close to now without asking twice.
+        observe(ticker(60_000)) { refreshTrends() }
         render()
     }
 
@@ -75,6 +81,7 @@ class AmsFragment : BaseFragment() {
         if (external.isNotEmpty()) {
             body.addView(externalCard(ctx, id, external, loadedTray))
         }
+        refreshTrends()
     }
 
     private fun unitCard(
@@ -126,7 +133,9 @@ class AmsFragment : BaseFragment() {
             card.addView(Ui.space(ctx, 6))
         }
 
-        card.addView(Ui.space(ctx, 2))
+        card.addView(Ui.space(ctx, Ui.S))
+        card.addView(trendFor(ctx, printerId, amsId).view, Ui.wide(ctx))
+        card.addView(Ui.space(ctx, Ui.M))
         card.addView(dryingControls(ctx, printerId, status, amsId, running), Ui.wide(ctx))
         return card
     }
@@ -277,6 +286,40 @@ class AmsFragment : BaseFragment() {
         Ui.gap(ctx, row, Ui.XS)
         row.addView(Ui.button(ctx, "Assign") { chooseSpoolFor(printerId, slot) })
         return row
+    }
+
+    // ------------------------------------------------------------ humidity trend
+
+    private fun trendFor(ctx: Context, printerId: Int, amsId: Int): AmsTrend {
+        val trend = trends.getOrPut("$printerId/$amsId") { AmsTrend(ctx) }
+        // The card it sat in has just been thrown away and rebuilt.
+        (trend.view.parent as? ViewGroup)?.removeView(trend.view)
+        return trend
+    }
+
+    /** Fetches the history of every unit on screen whose chart is older than the server's step. */
+    private fun refreshTrends() {
+        val ctx = context ?: return
+        val printerId = Repo.selected.value
+        val units = Repo.statuses.value[printerId]?.objects("ams").orEmpty()
+        val now = System.currentTimeMillis()
+        for (unit in units) {
+            val amsId = unit.optInt("id")
+            val trend = trends["$printerId/$amsId"] ?: continue
+            if (now - trend.requestedAt < AmsTrend.REFRESH_MS) continue
+            trend.requestedAt = now
+            background({ Repo.api.amsHistory(printerId, amsId, AmsTrend.SPAN_HOURS.toInt()) }) { result ->
+                result.onSuccess {
+                    val at = System.currentTimeMillis()
+                    trend.show(ctx, Trends.amsHistory(it, at), at)
+                }
+                result.onFailure {
+                    trend.failed(it.message)
+                    // Try again on the next minute's tick rather than in five.
+                    trend.requestedAt = System.currentTimeMillis() - AmsTrend.REFRESH_MS + 60_000
+                }
+            }
+        }
     }
 
     /** Slot-first assignment: pick the slot on screen, then choose the spool. */

@@ -136,6 +136,10 @@ class Shots {
                             request.contains("shopping-list") -> shopping.toString()
                             request.contains("inventory/spools") -> spools.toString()
                             request.contains("settings") -> JSONObject().put("low_stock_threshold", 20).toString()
+                            request.contains("ams-history") -> amsHistory().toString()
+                            request.contains("printer-sensor-history") -> heaterHistory().toString()
+                            request.contains("archives/stats") -> stats().toString()
+                            request.contains("archives/slim") -> runs().toString()
                             else -> machineExtras(request) ?: "[]"
                         }
                         val bytes = body.toByteArray()
@@ -156,6 +160,88 @@ class Shots {
             }
         }.apply { isDaemon = true }.start()
         return socket.localPort
+    }
+
+    // ------------------------------------------------ history, for the charts
+
+    /** The server's own timestamp shape: UTC, with no zone written on it. */
+    private fun at(minutesAgo: Int): String =
+        java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(minutesAgo.toLong()).toString()
+
+    /**
+     * A day of an AMS drying out and then creeping back up: dry overnight,
+     * damp by the afternoon, so all three colours of the line show.
+     */
+    private fun amsHistory(): JSONObject {
+        val data = JSONArray()
+        for (i in 288 downTo 0) {
+            val minutes = i * 5
+            // A gap of an hour, as when the server was restarted.
+            if (minutes in 600..660) continue
+            val t = (288 - i) / 288.0
+            val humidity = when {
+                t < 0.2 -> 52 - t * 100
+                t < 0.35 -> 32.0
+                else -> 32 + (t - 0.35) * 55
+            } + Math.sin(i / 6.0) * 1.5
+            data.put(JSONObject().put("recorded_at", at(minutes))
+                .put("humidity", humidity).put("humidity_raw", humidity)
+                .put("temperature", 24 + Math.sin(i / 40.0) * 3))
+        }
+        return JSONObject().put("printer_id", 1).put("ams_id", 0).put("data", data)
+            .put("min_humidity", 22).put("max_humidity", 67)
+    }
+
+    /** Nozzle, bed and chamber through a print that started about three hours ago. */
+    private fun heaterHistory(): JSONObject {
+        fun series(kind: String, value: (Int) -> Double, target: (Int) -> Double): JSONObject {
+            val data = JSONArray()
+            for (m in 240 downTo 0) {
+                data.put(JSONObject().put("recorded_at", at(m)).put("value", value(m)).put("target", target(m)))
+            }
+            return JSONObject().put("sensor_kind", kind).put("data", data)
+        }
+        val start = 175
+        fun printing(m: Int) = m <= start
+        val nozzle = series("nozzle",
+            { m -> if (!printing(m)) 38.0 else if (m > start - 4) 38 + (start - m) * 45.0 else 219 + Math.sin(m / 3.0) },
+            { m -> if (printing(m)) 220.0 else 0.0 })
+        val bed = series("bed",
+            { m -> if (!printing(m)) 27.0 else minOf(60.0, 27 + (start - m) * 6.0) - if (m in 60..70) 6 else 0 },
+            { m -> if (printing(m)) 60.0 else 0.0 })
+        val chamber = series("chamber",
+            { m -> if (!printing(m)) 26.0 else minOf(36.0, 26 + (start - m) * 0.2) },
+            { _ -> 0.0 })
+        return JSONObject().put("printer_id", 1).put("series", JSONArray().put(bed).put(chamber).put(nozzle))
+    }
+
+    private fun stats(): JSONObject = JSONObject()
+        .put("total_prints", 58).put("successful_prints", 49).put("failed_prints", 5)
+        .put("cancelled_prints", 4).put("total_print_time_hours", 212.4)
+        .put("total_filament_grams", 4630.0).put("total_cost", 96.4).put("total_energy_kwh", 31.2)
+        .put("prints_by_filament_type", JSONObject().put("PLA", 38).put("PETG", 14).put("ABS", 6))
+        .put("prints_by_printer", JSONObject().put("1", 41).put("2", 17))
+
+    /** A month of runs, most finished, a few not. */
+    private fun runs(): JSONArray {
+        val out = JSONArray()
+        val materials = listOf("PLA", "PLA", "PETG", "PLA", "ABS", "PETG", "PLA")
+        var n = 0
+        for (day in 0 until 30) {
+            val prints = listOf(2, 0, 3, 1, 4, 2, 0, 1, 3, 2)[day % 10]
+            for (p in 0 until prints) {
+                n++
+                val status = when {
+                    n % 11 == 0 -> "failed"
+                    n % 13 == 0 -> "cancelled"
+                    else -> "completed"
+                }
+                out.put(JSONObject().put("created_at", at(day * 1440 + p * 180 + 60))
+                    .put("status", status).put("filament_type", materials[n % materials.size])
+                    .put("filament_used_grams", 30.0 + (n * 37) % 160).put("printer_id", 1 + n % 2))
+            }
+        }
+        return out
     }
 
     /** Plugs, maintenance counters and firmware, as the Printers and Control screens ask for them. */
@@ -223,8 +309,49 @@ class Shots {
             seed("_error", null as String?)
             shadowOf(Looper.getMainLooper()).idle()
             capture(activity.window.decorView, File(out, "$name.png"))
+            if (name == "ams" || name == "stats") {
+                // The humidity chart sits under the slots, below the fold, and
+                // Stats runs to a second screen.
+                scrollToEnd(activity.window.decorView)
+                capture(activity.window.decorView, File(out, "$name-scrolled.png"))
+            }
         }
 
+        // The heater history, as it opens over Control.
+        activity.showTab(1)
+        shadowOf(Looper.getMainLooper()).idle()
+        val control = activity.supportFragmentManager.fragments
+            .filterIsInstance<io.github.krzkawa.bambuddyaio.ui.BaseFragment>().first { it.isVisible }
+        io.github.krzkawa.bambuddyaio.ui.HeaterHistory.show(control, 1)
+        shadowOf(Looper.getMainLooper()).idle()
+        Thread.sleep(400)
+        shadowOf(Looper.getMainLooper()).idle()
+        val dialog = org.robolectric.shadows.ShadowDialog.getLatestDialog()
+        captureDialog(activity.window.decorView, dialog.window!!.decorView, File(out, "heater-history.png"))
+        dialog.dismiss()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        // Settings runs past one screen; the phone's own cards are further down.
+        activity.showTab(9)
+        shadowOf(Looper.getMainLooper()).idle()
+        val scroller = activity.findViewById<android.view.ViewGroup>(io.github.krzkawa.bambuddyaio.R.id.content_frame)
+            .getChildAt(0) as android.widget.ScrollView
+        listOf(1, 2, 3).forEach { page ->
+            capture(activity.window.decorView, File(out, "settings-$page.png")) {
+                scroller.scrollTo(0, page * 600)
+            }
+        }
+
+        // What a finished print looks like when it lands on the status strip.
+        activity.showTab(0)
+        io.github.krzkawa.bambuddyaio.appliance.Alerts.announce(
+            activity,
+            io.github.krzkawa.bambuddyaio.appliance.Events.between(
+                2, "P1S", status(), idle().put("state", "FINISH").put("subtask_name", "benchy.gcode.3mf")
+            )
+        )
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(2))
+        capture(activity.window.decorView, File(out, "alert.png"))
         // Control for an idle printer, where the Move card is offered: locked,
         // then unlocked, each drawn at full length so nothing is cut off.
         Repo.select(2)
@@ -280,6 +407,40 @@ class Shots {
         shadowOf(Looper.getMainLooper()).idle()
     }
 
+    private fun scrollToEnd(view: View) {
+        if (view is android.widget.ScrollView) {
+            view.scrollTo(0, view.getChildAt(0).height)
+            return
+        }
+        if (view is android.view.ViewGroup) for (i in 0 until view.childCount) scrollToEnd(view.getChildAt(i))
+    }
+
+    /** The screen behind, dimmed the way Android dims it, with the dialog centred on top. */
+    private fun captureDialog(screen: View, dialog: View, file: File) {
+        val w = screen.resources.displayMetrics.widthPixels
+        val h = screen.resources.displayMetrics.heightPixels
+        screen.measure(
+            View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY)
+        )
+        screen.layout(0, 0, w, h)
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        screen.draw(canvas)
+        canvas.drawColor(0x99000000.toInt())
+        val dw = (w * 0.9f).toInt()
+        dialog.measure(
+            View.MeasureSpec.makeMeasureSpec(dw, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.AT_MOST)
+        )
+        dialog.layout(0, 0, dw, dialog.measuredHeight)
+        canvas.save()
+        canvas.translate((w - dw) / 2f, (h - dialog.measuredHeight) / 2f)
+        dialog.draw(canvas)
+        canvas.restore()
+        FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
     /** The screen's own scroller drawn at its whole height, for screens longer than the phone. */
     private fun captureFull(root: View, file: File) {
         capture(root, File(file.parentFile, "tmp.png"))
@@ -304,7 +465,7 @@ class Shots {
         FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    private fun capture(view: View, file: File) {
+    private fun capture(view: View, file: File, afterLayout: () -> Unit = {}) {
         val w = view.resources.displayMetrics.widthPixels
         val h = view.resources.displayMetrics.heightPixels
         view.measure(
@@ -312,6 +473,7 @@ class Shots {
             View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY)
         )
         view.layout(0, 0, w, h)
+        afterLayout()
         val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         view.draw(Canvas(bitmap))
         FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }

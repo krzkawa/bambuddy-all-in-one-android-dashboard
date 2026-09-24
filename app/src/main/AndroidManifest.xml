@@ -8,6 +8,8 @@
     <!-- The phone is face down against a spool during a scan, so the only
          feedback that reaches the user at that moment is one he can feel. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- After a power cut the dashboard comes back by itself. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Not required: the dashboard is fully usable on a phone without NFC. -->
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
@@ -43,5 +45,14 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="false"
             android:screenOrientation="sensorLandscape" />
+
+        <receiver
+            android:name=".appliance.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

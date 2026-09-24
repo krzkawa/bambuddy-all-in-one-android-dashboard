@@ -502,6 +502,23 @@ class Api(private val prefs: Prefs) {
 
     fun statistics(): JSONObject = getObject("archives/stats")
 
+    // ---------------------------------------------------------------- history
+
+    /** Totals from [dateFrom] (YYYY-MM-DD) on; the server counts one row per run. */
+    fun statisticsSince(dateFrom: String): JSONObject = getObject("archives/stats", "date_from" to dateFrom)
+
+    /** Every run since [dateFrom], newest first — what the Stats charts are bucketed from. */
+    fun runsSince(dateFrom: String, limit: Int = 5000): JSONArray =
+        getArray("archives/slim", "date_from" to dateFrom, "limit" to limit)
+
+    /** One AMS unit's humidity and temperature, recorded by the server every five minutes. */
+    fun amsHistory(printerId: Int, amsId: Int, hours: Int = 24): JSONObject =
+        getObject("ams-history/$printerId/$amsId", "hours" to hours)
+
+    /** Nozzle, bed and chamber readings with their targets, recorded every minute. */
+    fun heaterHistory(printerId: Int, hours: Int): JSONObject =
+        getObject("printer-sensor-history/$printerId", "hours" to hours.coerceIn(1, 168))
+
     fun systemInfo(): JSONObject = getObject("system/info")
 
     // ---------------------------------------------------------- machine extras
