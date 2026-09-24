@@ -53,7 +53,7 @@ class StatsFragment : BaseFragment() {
         val ctx = context ?: return
         drawSpanStrip(ctx)
         body.removeAllViews()
-        body.addView(empty(ctx, "Loading…"))
+        body.addView(waiting(ctx))
         val zone = ZoneId.systemDefault()
         val today = LocalDate.now(zone)
         val chosen = span
@@ -67,7 +67,7 @@ class StatsFragment : BaseFragment() {
             result.onSuccess { render(it, chosen, today, zone) }
             result.onFailure {
                 body.removeAllViews()
-                body.addView(empty(ctx, it.message ?: "Could not load the statistics"))
+                body.addView(failed(ctx, it, "the statistics") { load() })
             }
         }
     }
@@ -111,6 +111,7 @@ class StatsFragment : BaseFragment() {
             body.addView(Ui.space(ctx, Ui.M))
             body.addView(it, wide(ctx))
         }
+        Ui.arrive(body)
     }
 
     // -------------------------------------------------------------- the cards

@@ -15,9 +15,10 @@ import io.github.krzkawa.bambuddyaio.net.Repo
 class CameraFragment : BaseFragment() {
 
     private lateinit var picker: LinearLayout
-    private lateinit var holder: LinearLayout
+    private lateinit var holder: FrameLayout
     private lateinit var note: android.widget.TextView
     private var view: MjpegView? = null
+    private lateinit var state: LinearLayout
     private var showing = -1
 
     /** The printer whose stream the server currently believes is wanted, or -1. */
@@ -35,7 +36,13 @@ class CameraFragment : BaseFragment() {
         note.setPadding(0, 0, 0, Ui.dp(ctx, Ui.S))
         content.addView(note)
 
-        holder = Ui.col(ctx)
+        // What the picture says while there is no picture. A camera that has
+        // stopped used to be a blank grey rectangle with one small grey line
+        // above it, which reads as a screen that has not finished loading
+        // rather than a camera to press Reconnect on.
+        state = Ui.col(ctx)
+        state.gravity = android.view.Gravity.CENTER
+        holder = FrameLayout(ctx)
         // The video takes whatever is left below the header rather than a fixed
         // 240 dp, which on a 288 dp-tall screen left it a postage stamp with
         // empty space under it. The floor is there so it cannot vanish entirely
@@ -53,6 +60,7 @@ class CameraFragment : BaseFragment() {
         val printerId = Repo.selected.value
         if (printerId < 0) {
             note.text = "Choose a printer first."
+            place(Ui.notice(ctx, "Choose a printer first."))
             return
         }
         if (!force && showing == printerId && view != null) return
@@ -68,16 +76,24 @@ class CameraFragment : BaseFragment() {
         closeFullscreen()
         view?.stop()
         holder.removeAllViews()
+        state.removeAllViews()
         val player = MjpegView(ctx)
-        player.onError = { message -> if (isAdded) note.text = message }
+        player.onError = { message ->
+            if (isAdded) {
+                note.text = message
+                showState(ctx, message, "Reconnect") { openStream(force = true) }
+            }
+        }
+        player.onFirstFrame = { if (isAdded) hideState() }
         player.isClickable = true
         player.setOnClickListener { openFullscreen() }
-        holder.addView(
-            player,
-            Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        )
+        holder.addView(player, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
         view = player
         note.text = "Connecting…"
+        showWaiting(ctx)
 
         // The stream route takes a token in the URL rather than a header, so
         // one has to be minted before the first frame can arrive.
@@ -100,8 +116,49 @@ class CameraFragment : BaseFragment() {
                 streaming = printerId
                 player.start(Repo.api, url)
             }
-            result.onFailure { note.text = it.message ?: "Could not reach the camera" }
+            result.onFailure {
+                val message = it.message ?: "Could not reach the camera"
+                note.text = message
+                showState(ctx, message, "Try again") { openStream(force = true) }
+            }
         }
+    }
+
+    // ------------------------------------------- what the frame says when empty
+
+    /** Puts [body] over the picture, centred, until a frame turns up. */
+    private fun place(body: android.view.View) {
+        state.removeAllViews()
+        // Full width, not wrapped: the message centres itself inside it, and a
+        // wrapped box leaves the sentence to be measured against whatever width
+        // the frame happens to offer, which cuts it after the first line.
+        state.addView(
+            body,
+            Ui.lp(state.context, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
+        if (state.parent == null) {
+            holder.addView(state, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+        } else {
+            // The player is rebuilt on every reconnect and lands on top of the
+            // stack, so the placeholder has to climb back over it.
+            state.bringToFront()
+        }
+        state.visibility = android.view.View.VISIBLE
+        // The frame is saying it; the line above it would only say it twice.
+        note.visibility = android.view.View.GONE
+    }
+
+    private fun showWaiting(ctx: Context) = place(Ui.waiting(ctx))
+
+    private fun showState(ctx: Context, message: String, action: String, onAction: () -> Unit) =
+        place(Ui.notice(ctx, message, null, action, onAction))
+
+    private fun hideState() {
+        state.visibility = android.view.View.GONE
+        note.visibility = android.view.View.VISIBLE
     }
 
     // ------------------------------------------------------------- fullscreen
@@ -185,10 +242,10 @@ class CameraFragment : BaseFragment() {
         val ctx = context
         val player = view
         if (ctx != null && player != null) {
-            player.moveTo(
-                holder,
-                Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            )
+            player.moveTo(holder, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
             player.setOnClickListener { openFullscreen() }
         }
         dialog.dismiss()

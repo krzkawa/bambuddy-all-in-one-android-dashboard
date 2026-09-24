@@ -91,7 +91,13 @@ class DashboardFragment : BaseFragment() {
         ageLines.clear()
 
         if (printers.isEmpty()) {
-            list.addView(empty(ctx, Repo.error.value ?: "No printers on this Bambuddy server yet."))
+            list.addView(
+                empty(
+                    ctx,
+                    Repo.error.value ?: "No printers on this Bambuddy server yet.",
+                    "Add one in Bambuddy and it appears here."
+                )
+            )
             return
         }
 
@@ -101,6 +107,7 @@ class DashboardFragment : BaseFragment() {
             list.addView(card(ctx, id, printer, statuses[id]))
             list.addView(Ui.space(ctx, Ui.S))
         }
+        Ui.arrive(list)
         refreshAges()
     }
 
@@ -266,7 +273,11 @@ class DashboardFragment : BaseFragment() {
         }
         card.addView(headline, Ui.wide(ctx))
 
-        if (running || progress > 0) {
+        // Only a print that is still moving gets a bar. A finished plate reads
+        // 100%, so the old rule drew a full-width bar under every idle printer
+        // that said nothing and cost the card a line — which on a screen this
+        // short is a line the printer below it needed.
+        if (running) {
             card.addView(Ui.space(ctx, Ui.S))
             val bar = Bar(ctx)
             bar.set(progress / 100.0, colour)

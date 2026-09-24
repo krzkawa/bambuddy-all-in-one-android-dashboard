@@ -32,7 +32,7 @@ class QueueFragment : BaseFragment() {
         screenAction("Add print") { PrintFlow.open(this, LibraryFragment.of(null)) }
         list = Ui.col(ctx)
         content.addView(list, Ui.wide(ctx))
-        list.addView(empty(ctx, "Loading…"))
+        list.addView(waiting(ctx))
         // The queue changes by itself — the scheduler starts things, prints
         // finish — so it is read again while the screen is up rather than
         // needing a Reload button.
@@ -47,9 +47,9 @@ class QueueFragment : BaseFragment() {
                 items = it.objects()
                 render()
             }
-            result.onFailure {
+            result.onFailure { error ->
                 list.removeAllViews()
-                list.addView(empty(ctx, it.message ?: "Could not load the queue"))
+                list.addView(failed(ctx, error, "the queue") { load() })
             }
         }
     }
@@ -62,36 +62,78 @@ class QueueFragment : BaseFragment() {
         // jobs pushing that off the top is just noise.
         val shown = Queue.upcoming(items)
         if (shown.isEmpty()) {
-            list.addView(empty(ctx, "Nothing waiting. Tap Add print to send one."))
+            list.addView(empty(ctx, "Nothing waiting.", "Tap Add print to send one."))
             return
         }
-        for (row in Queue.rows(shown)) {
-            list.addView(row(ctx, row), Ui.wide(ctx))
-            list.addView(Ui.space(ctx, 6))
+
+        val here = Ui.col(ctx)
+        val rows = Queue.rows(shown)
+        // Whatever is on the printer right now keeps the full width and sits
+        // alone at the top: it is the one line on this screen he is actually
+        // looking for, and a queue of eight should not hide it in a grid.
+        val active = rows.filter { Queue.isActive(it.first) }
+        val queued = rows.filterNot { Queue.isActive(it.first) }
+        for (row in active) {
+            here.addView(row(ctx, row, position = null), Ui.wide(ctx))
+            here.addView(Ui.space(ctx, 6))
         }
+        if (queued.isNotEmpty()) {
+            if (active.isNotEmpty()) {
+                here.addView(Ui.space(ctx, Ui.S))
+                here.addView(Ui.heading(ctx, if (queued.size == 1) "Next" else "Waiting"))
+            }
+            // Two columns where the screen has room, but every row carries its
+            // place in the line, so reading across rather than down never loses
+            // the order the printer will actually work through.
+            val cards = queued.mapIndexed { index, row ->
+                row(ctx, row, position = index + 1) as android.view.View
+            }
+            here.addView(Ui.grid(ctx, cards, columns(ctx)), Ui.wide(ctx))
+        }
+        list.addView(here, Ui.wide(ctx))
+        Ui.arrive(here)
     }
 
-    private fun row(ctx: Context, row: Queue.Row): LinearLayout {
+    private fun row(ctx: Context, row: Queue.Row, position: Int?): LinearLayout {
         val item = row.first
         val card = Ui.inset(ctx)
         card.background = Ui.rounded(Ui.cardColor(ctx), 10, ctx)
+        // On half a screen the name shares its line with nothing: a file name
+        // cut to "hinge…4.3mf" to make room for the arrows, More and Start is a
+        // row he cannot read, and the point of the row is knowing what is in
+        // it. The controls drop to a line of their own underneath.
+        val narrow = position != null && columns(ctx) > 1
         val line = Ui.row(ctx)
 
-        // A dot ahead of the name says which one is on the printer right now.
+        // A dot ahead of the name says which one is on the printer right now;
+        // everything else is numbered by where it stands in the line.
         val active = Queue.isActive(item)
-        line.addView(Ui.dot(ctx, if (active) Ui.good(ctx) else Ui.faintColor(ctx)))
-        Ui.gap(ctx, line, 10)
+        if (position == null) {
+            line.addView(Ui.dot(ctx, if (active) Ui.good(ctx) else Ui.faintColor(ctx)))
+            Ui.gap(ctx, line, 10)
+        } else {
+            val place = Ui.tiny(ctx, position.toString())
+            place.gravity = android.view.Gravity.CENTER
+            line.addView(place, Ui.lp(ctx, 14, ViewGroup.LayoutParams.WRAP_CONTENT))
+            Ui.gap(ctx, line, Ui.S)
+        }
 
         val info = Ui.col(ctx)
         val name = Queue.rowName(row)
-        info.addView(if (active) Ui.title(ctx, name) else Ui.body(ctx, name))
+        val title = if (active) Ui.title(ctx, name) else Ui.body(ctx, name)
+        title.maxLines = 1
+        title.ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        info.addView(title)
         val bits = ArrayList<String>()
         item.str("status")?.let { bits.add(Ui.stateWord(it)) }
         item.str("printer_name")?.let { bits.add(it) }
         item.int("plate_id")?.takeIf { it > 1 }?.let { bits.add("plate $it") }
         item.int("print_time_seconds")?.takeIf { it > 0 }?.let { bits.add(Ui.minutes(it / 60)) }
         item.dbl("filament_used_grams")?.takeIf { it > 0 }?.let { bits.add("${it.toInt()} g") }
-        info.addView(Ui.tiny(ctx, bits.joinToString(" · ")))
+        val meta = Ui.tiny(ctx, bits.joinToString(" · "))
+        meta.maxLines = 1
+        meta.ellipsize = android.text.TextUtils.TruncateAt.END
+        info.addView(meta)
         // A start time is what he wants to know about a scheduled print, and it
         // is not a warning, so it is said plainly rather than in amber.
         Queue.scheduledAt(item)?.takeIf { Queue.isScheduled(item) }?.let {
@@ -102,16 +144,31 @@ class QueueFragment : BaseFragment() {
         Queue.waitingReason(item)?.let {
             val why = Ui.tiny(ctx, it)
             why.setTextColor(Ui.warn(ctx))
+            why.maxLines = 1
+            why.ellipsize = android.text.TextUtils.TruncateAt.END
             info.addView(why)
         }
         line.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
+        val controls = if (narrow) Ui.row(ctx) else line
+        if (narrow) Ui.push(ctx, controls)
         if (Queue.canStart(item)) {
-            pendingActions(ctx, line, row, name)
+            pendingActions(ctx, controls, row, name)
         } else if (item.str("status") == "printing") {
-            line.addView(Ui.quiet(ctx, "Stop") { confirmStop(ctx, item, name) })
+            controls.addView(Ui.quiet(ctx, "Stop") { confirmStop(ctx, item, name) })
         }
-        card.addView(line, Ui.wide(ctx))
+
+        // Ui.inset is a row, so a second line has to go inside a column of its
+        // own rather than beside the first one.
+        if (narrow) {
+            val stack = Ui.col(ctx)
+            stack.addView(line, Ui.wide(ctx))
+            stack.addView(Ui.space(ctx, Ui.XS))
+            stack.addView(controls, Ui.wide(ctx))
+            card.addView(stack, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        } else {
+            card.addView(line, Ui.wide(ctx))
+        }
         return card
     }
 

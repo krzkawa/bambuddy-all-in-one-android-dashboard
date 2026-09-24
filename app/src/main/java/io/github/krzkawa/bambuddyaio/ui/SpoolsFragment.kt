@@ -29,12 +29,15 @@ class SpoolsFragment : BaseFragment() {
     private var filter = ""
     private var view = ALL
     private var loaded = false
+    private var loadError: Throwable? = null
 
     override fun build(ctx: Context) {
         screenAction("Reload") { load() }
 
         val top = Ui.row(ctx)
-        val search = Ui.input(ctx, "Search by material, colour or brand")
+        // Short, because the four view segments now sit beside it: the old hint
+        // wrapped to two lines and took the row with it.
+        val search = Ui.input(ctx, "Search spools")
         search.addTextChangedListener(object : TextWatcher {
             override fun afterTextChanged(s: Editable?) {
                 filter = s?.toString().orEmpty()
@@ -79,8 +82,9 @@ class SpoolsFragment : BaseFragment() {
 
     private fun load() {
         list.removeAllViews()
-        context?.let { list.addView(Ui.dim(it, "Loading…")) }
+        context?.let { list.addView(waiting(it)) }
         loaded = false
+        loadError = null
         val archived = view == ARCHIVED
         background({
             val all = Repo.api.spools(archived).objects()
@@ -106,7 +110,10 @@ class SpoolsFragment : BaseFragment() {
             }
             result.onFailure {
                 spools = emptyList()
-                toast(it.message ?: "Could not load your spools")
+                // A failure used to be a toast over an empty list, which is
+                // gone in three seconds and leaves a screen that looks like an
+                // empty inventory rather than a server that did not answer.
+                loadError = it
             }
             render()
         }
@@ -116,6 +123,10 @@ class SpoolsFragment : BaseFragment() {
         val ctx = context ?: return
         buildViews(ctx)
         list.removeAllViews()
+        loadError?.let {
+            list.addView(failed(ctx, it, "your spools") { load() })
+            return
+        }
         when (view) {
             LOW -> renderLow(ctx)
             TO_BUY -> renderShopping(ctx)
@@ -138,19 +149,19 @@ class SpoolsFragment : BaseFragment() {
         list.addView(Ui.space(ctx, Ui.XS))
 
         if (shown.isEmpty()) {
-            list.addView(empty(ctx, when {
-                spools.isNotEmpty() -> "Nothing matches that."
-                view == ARCHIVED -> "Nothing is archived."
-                else -> "No spools yet."
-            }))
+            list.addView(when {
+                spools.isNotEmpty() ->
+                    empty(ctx, "Nothing matches that.", "Try part of a material, colour or brand.")
+                view == ARCHIVED -> empty(ctx, "Nothing is archived.")
+                else -> empty(ctx, "No spools yet.", "Scan a spool tag to add one.")
+            })
             return
         }
-        for (spool in shown) {
+        grid(ctx, shown.map { spool ->
             val trailing = if (Spools.isArchived(spool)) Ui.quiet(ctx, "Restore") { restore(spool) }
             else Ui.button(ctx, "Assign") { assign(ctx, spool) }
-            list.addView(row(ctx, spool, Spools.summary(spool), trailing), Ui.wide(ctx))
-            list.addView(Ui.space(ctx, 6))
-        }
+            row(ctx, spool, Spools.summary(spool), trailing) as View
+        })
     }
 
     /** The spools under their threshold, emptiest first, each one tap from the shopping list. */
@@ -162,14 +173,13 @@ class SpoolsFragment : BaseFragment() {
             list.addView(empty(ctx, if (spools.isEmpty()) "No spools yet." else "Nothing is running low."))
             return
         }
-        for (spool in low) {
+        grid(ctx, low.map { spool ->
             val line = "${Spools.grams(Spools.gramsLeft(spool))} left · ${Math.round(Spools.percentLeft(spool))}%" +
                 (spool.str("storage_location")?.let { " · $it" } ?: "")
             val trailing = if (Spools.onShoppingList(spool, shopping)) Ui.tiny(ctx, "On the list")
             else Ui.button(ctx, "Add to list") { addToShopping(spool) }
-            list.addView(row(ctx, spool, line, trailing), Ui.wide(ctx))
-            list.addView(Ui.space(ctx, 6))
-        }
+            row(ctx, spool, line, trailing) as View
+        })
     }
 
     /** Bambuddy's shopping list, moved along as rolls are ordered and arrive. */
@@ -202,6 +212,19 @@ class SpoolsFragment : BaseFragment() {
         }
     }
 
+    /**
+     * Lays a view's rows out across the screen rather than down it.
+     *
+     * An inventory is the screen with the most rows in the app and the least on
+     * each of them: one line of text across 640 dp with a hand's width of
+     * nothing beside it. Two columns is the same row twice over.
+     */
+    private fun grid(ctx: Context, rows: List<View>) {
+        val grid = Ui.grid(ctx, rows, columns(ctx))
+        list.addView(grid, Ui.wide(ctx))
+        Ui.arrive(grid)
+    }
+
     private fun row(ctx: Context, spool: JSONObject, summary: String, trailing: View): LinearLayout {
         // A spool is a list row, not a panel: forty panels down a screen is
         // forty boxes and no list.
@@ -214,8 +237,21 @@ class SpoolsFragment : BaseFragment() {
         Ui.gap(ctx, line, Ui.M)
 
         val info = Ui.col(ctx)
-        info.addView(Ui.body(ctx, Assign.spoolName(spool)))
-        info.addView(Ui.tiny(ctx, summary))
+        // Half the inventory is "Bambu Lab · …", so on a narrow row the brand
+        // moves to the line underneath rather than eating the two words that
+        // tell two spools apart.
+        val narrow = columns(ctx) > 1
+        val name = Ui.body(
+            ctx, if (narrow) Assign.shortSpoolName(spool) else Assign.spoolName(spool)
+        )
+        name.maxLines = 1
+        name.ellipsize = android.text.TextUtils.TruncateAt.END
+        info.addView(name)
+        val brand = spool.str("brand").takeIf { narrow }
+        val line2 = Ui.tiny(ctx, listOfNotNull(brand, summary).joinToString(" · "))
+        line2.maxLines = 1
+        line2.ellipsize = android.text.TextUtils.TruncateAt.END
+        info.addView(line2)
         line.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         line.addView(trailing)
         card.addView(line, Ui.wide(ctx))

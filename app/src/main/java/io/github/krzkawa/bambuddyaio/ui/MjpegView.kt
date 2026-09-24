@@ -45,6 +45,9 @@ class MjpegView(ctx: Context) : ImageView(ctx) {
 
     var onError: ((String) -> Unit)? = null
 
+    /** Fires on the first frame of a stream, so a screen can drop its placeholder. */
+    var onFirstFrame: (() -> Unit)? = null
+
     init {
         scaleType = ScaleType.FIT_CENTER
         setBackgroundColor(Ui.color(ctx, io.github.krzkawa.bambuddyaio.R.color.card_alt))
@@ -180,6 +183,7 @@ class MjpegView(ctx: Context) : ImageView(ctx) {
             last = bitmap
             setImageBitmap(bitmap)
             previous?.recycle()
+            if (previous == null) onFirstFrame?.invoke()
         }
     }
 
