@@ -10,6 +10,8 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -414,4 +416,32 @@ class Api(private val prefs: Prefs) {
             override fun onResponse(call: Call, response: Response) = response.close()
         })
     }
+
+    // ------------------------------------------------------------ live updates
+
+    /**
+     * A short-lived token for `/ws`, which cannot carry the auth headers.
+     * The server mints one even with authentication off, and ignores it then.
+     */
+    fun wsToken(): String = postObject("auth/ws-token").optString("token")
+
+    /**
+     * Opens Bambuddy's WebSocket. OkHttp pings it every [LIVE_PING_SECONDS],
+     * and a ping that goes unanswered fails the socket, which is how a
+     * connection the wifi has quietly dropped gets noticed at all.
+     */
+    fun openLive(token: String?, listener: WebSocketListener): WebSocket {
+        val request = Request.Builder().url(url("ws", "token" to token?.ifBlank { null })).build()
+        return liveClient.newWebSocket(request, listener)
+    }
+
+    private val liveClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(0, TimeUnit.SECONDS)
+            .pingInterval(LIVE_PING_SECONDS, TimeUnit.SECONDS)
+            .build()
+    }
 }
+
+/** How often the live socket is pinged; also roughly how long a dead one goes unnoticed. */
+const val LIVE_PING_SECONDS = 20L
