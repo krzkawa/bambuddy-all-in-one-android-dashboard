@@ -27,6 +27,11 @@ object ScanFeedback {
         vibrate(context, if (tag.failure == null) GOOD else BAD)
     }
 
+    /** The same two patterns for anything else done with the phone against a tag. */
+    fun buzz(context: Context, ok: Boolean) {
+        vibrate(context, if (ok) GOOD else BAD)
+    }
+
     // VIBRATOR_SERVICE and the pattern overload are both deprecated in favour of
     // VibratorManager, which arrived in API 31. They still work, and on the Android 7
     // phone this app is built for they are the only path that does.
