@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Lets the preview step look up which pull requests are still open.
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +35,8 @@ jobs:
         run: |
           ./gradlew testDebugUnitTest assembleDebug assembleRelease --stacktrace \
             -PbuildNumber=${{ github.run_number }} \
-            -PbuildSha=${{ github.sha }}
+            -PbuildSha=${{ github.sha }} \
+            -PbuildPr=${{ github.event.pull_request.number }}
 
       - name: Name the APKs after the run
         run: |
@@ -66,21 +69,43 @@ jobs:
       # The same idea for a branch that has not landed yet. Work now arrives as
       # a pull request, and a pull request nobody can install is a pull request
       # nobody can judge — the whole app is a thing you look at on a phone. The
-      # tag is fixed, so the link never changes, and it always holds the newest
-      # pull-request build rather than one per branch.
+      # tag is fixed, so the link never changes. Several pull requests are open
+      # at once, so each keeps its own file, named by its number, and the notes
+      # list which file is which; one pull request's build never replaces
+      # another's. Files for pull requests that have since closed are removed.
       - name: Publish a preview APK for a pull request
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          short=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
-          notes="Preview of #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}
-          Build ${{ github.run_number }} ($short) from \`${{ github.head_ref }}\`, not merged yet.
-          Install bambuddy-aio.apk over the top of what you have; Settings > Versions shows this build number. The main release is still at the \`latest\` tag."
+          file="bambuddy-aio-pr$PR.apk"
+          cp out/bambuddy-aio.apk "out/$file"
           gh release view preview >/dev/null 2>&1 \
-            || gh release create preview --title "Preview build" --notes "$notes" --prerelease
-          gh release edit preview --notes "$notes"
-          gh release upload preview out/bambuddy-aio.apk out/bambuddy-aio-debug.apk --clobber
+            || gh release create preview --title "Preview builds" --notes "Starting up" --prerelease
+          gh release upload preview "out/$file" --clobber
+
+          # Anything left over from before files were named by pull request.
+          for old in bambuddy-aio.apk bambuddy-aio-debug.apk; do
+            gh release delete-asset preview "$old" --yes 2>/dev/null || true
+          done
+
+          lines=""
+          for asset in $(gh release view preview --json assets --jq '.assets[].name' | grep -E '^bambuddy-aio-pr[0-9]+\.apk$' | sort -V); do
+            n=$(echo "$asset" | grep -oE '[0-9]+')
+            state=$(gh pr view "$n" --json state --jq .state 2>/dev/null || echo UNKNOWN)
+            if [ "$state" != "OPEN" ]; then
+              gh release delete-asset preview "$asset" --yes || true
+              continue
+            fi
+            title=$(gh pr view "$n" --json title --jq .title)
+            lines="$lines
+          - **$asset**: #$n, $title"
+          done
+
+          notes="One APK per open pull request. Pick the file with the pull request's number and install it over the top of what you have; Settings > Versions on the phone names the pull request it came from. The main build is still at the \`latest\` tag.
+          $lines"
+          gh release edit preview --title "Preview builds" --notes "$notes"
 
   smoke:
     name: Launch on Android 7
