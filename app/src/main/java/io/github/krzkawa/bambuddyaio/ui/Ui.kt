@@ -10,7 +10,10 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.AlphaAnimation
+import android.view.animation.Animation
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -135,6 +138,13 @@ object Ui {
     fun scroll(ctx: Context, child: View): ScrollView {
         val s = ScrollView(ctx)
         s.isFillViewport = true
+        // A screen that ends flush with the bottom edge looks like the end of
+        // the screen. Fading the last few dp is the only hint he gets that
+        // there is more under his thumb, and it costs nothing to draw.
+        s.isVerticalFadingEdgeEnabled = true
+        s.setFadingEdgeLength(dp(ctx, XL))
+        s.isVerticalScrollBarEnabled = false
+        s.overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         s.addView(
             child,
             ViewGroup.LayoutParams(
@@ -143,6 +153,221 @@ object Ui {
             )
         )
         return s
+    }
+
+    // ------------------------------------------------------------- the grid
+
+    /**
+     * How many list columns this screen is wide enough for.
+     *
+     * The phone is landscape and never rotates, so this is really a constant —
+     * but it is read from the window rather than assumed, so the app still
+     * looks right on a small screen, and on a tablet if one ever turns up.
+     */
+    fun listColumns(ctx: Context, minColumnDp: Int = 240): Int {
+        val available = ctx.resources.configuration.screenWidthDp - RAIL_AND_GUTTERS_DP
+        return (available / minColumnDp).coerceIn(1, 3)
+    }
+
+    /** The rail plus both page gutters, taken off the width before dividing it. */
+    private const val RAIL_AND_GUTTERS_DP = 106 + M * 2
+
+    /**
+     * Lays a list out in columns rather than down one long strip.
+     *
+     * A row of this app is one line of text and a button. Down a 640 dp-wide
+     * landscape screen that is a column of text with a hand's width of nothing
+     * beside it, and six rows in view. Two columns is the same row twice over
+     * and twelve in view, which is the difference between reading the list and
+     * scrolling it.
+     */
+    fun grid(ctx: Context, items: List<View>, columns: Int, gapDp: Int = 6): LinearLayout {
+        val grid = col(ctx)
+        if (columns <= 1) {
+            items.forEachIndexed { index, item ->
+                if (index > 0) grid.addView(space(ctx, gapDp))
+                grid.addView(item, wide(ctx))
+            }
+            return grid
+        }
+        items.chunked(columns).forEachIndexed { index, chunk ->
+            if (index > 0) grid.addView(space(ctx, gapDp))
+            val line = row(ctx)
+            line.gravity = Gravity.TOP
+            chunk.forEachIndexed { at, item ->
+                if (at > 0) gap(ctx, line, gapDp)
+                line.addView(item, lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            }
+            // The short last row keeps its columns the width of the ones above
+            // it, rather than stretching one card across the page.
+            repeat(columns - chunk.size) {
+                gap(ctx, line, gapDp)
+                line.addView(space(ctx, 1), lp(ctx, 0, 1, 1f))
+            }
+            grid.addView(line, wide(ctx))
+        }
+        return grid
+    }
+
+    /**
+     * A row of controls that shares out the width it is given.
+     *
+     * Four keys sized by their own labels either overflow a narrow card or
+     * leave it ragged. Sharing the row equally means they always fit, and it
+     * makes the smallest of them a bigger target than it was.
+     */
+    fun keys(ctx: Context, buttons: List<View>, gapDp: Int = XS): LinearLayout {
+        val line = row(ctx)
+        buttons.forEachIndexed { index, b ->
+            if (index > 0) gap(ctx, line, gapDp)
+            b.setPadding(dp(ctx, S), b.paddingTop, dp(ctx, S), b.paddingBottom)
+            line.addView(b, lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        return line
+    }
+
+    /**
+     * Two stacks of panels side by side.
+     *
+     * The same argument as [grid], for screens made of sections rather than
+     * rows: Control is four panels that each used a third of the width, so
+     * three of them were under the fold.
+     */
+    fun sideBySide(
+        ctx: Context,
+        left: List<View>,
+        right: List<View>,
+        gapDp: Int = M,
+        leftWeight: Float = 1f,
+        rightWeight: Float = 1f
+    ): LinearLayout {
+        val line = row(ctx)
+        line.gravity = Gravity.TOP
+        fun stack(views: List<View>): LinearLayout {
+            val c = col(ctx)
+            views.forEachIndexed { index, v ->
+                if (index > 0) c.addView(space(ctx, gapDp))
+                c.addView(v, wide(ctx))
+            }
+            return c
+        }
+        line.addView(stack(left), lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, leftWeight))
+        gap(ctx, line, gapDp)
+        line.addView(stack(right), lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, rightWeight))
+        return line
+    }
+
+    /**
+     * Deals a list of panels into two columns of roughly equal height.
+     *
+     * Alternating them puts every other panel on the right, which is wrong
+     * when the first one is four times the height of the second. This keeps a
+     * running total and always adds to the shorter side.
+     */
+    fun dealt(
+        ctx: Context,
+        sections: List<Pair<View, Int>>,
+        gapDp: Int = M,
+        leftShare: Float = 1f,
+        rightShare: Float = 1f
+    ): LinearLayout {
+        val left = ArrayList<View>()
+        val right = ArrayList<View>()
+        var leftHeight = 0
+        var rightHeight = 0
+        for ((view, weight) in sections) {
+            if (leftHeight <= rightHeight) {
+                left.add(view); leftHeight += weight
+            } else {
+                right.add(view); rightHeight += weight
+            }
+        }
+        return sideBySide(ctx, left, right, gapDp, leftShare, rightShare)
+    }
+
+    // ------------------------------------------------------------ the states
+
+    /**
+     * What a screen says when it has nothing to show: waiting, empty, or
+     * broken.
+     *
+     * Every screen used to word these itself, so a failed load was a toast on
+     * one screen, a red line on another and a silent empty list on a third.
+     * One shape for all three, and only the broken one offers a button —
+     * pressing Try again on an empty inventory does nothing twice.
+     */
+    fun notice(
+        ctx: Context,
+        message: String,
+        detail: String? = null,
+        actionLabel: String? = null,
+        onAction: (() -> Unit)? = null
+    ): LinearLayout {
+        val box = col(ctx)
+        box.gravity = Gravity.CENTER_HORIZONTAL
+        val p = dp(ctx, XL)
+        box.setPadding(dp(ctx, L), p, dp(ctx, L), p)
+        val head = text(ctx, message, 15f, dimColor(ctx), MEDIUM)
+        head.gravity = Gravity.CENTER
+        box.addView(head)
+        if (detail != null) {
+            val sub = text(ctx, detail, 13f, faintColor(ctx))
+            sub.gravity = Gravity.CENTER
+            sub.setPadding(0, dp(ctx, XS), 0, 0)
+            box.addView(sub)
+        }
+        if (actionLabel != null && onAction != null) {
+            box.addView(space(ctx, M))
+            box.addView(
+                button(ctx, actionLabel, onClick = onAction),
+                lp(ctx, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            )
+        }
+        return box
+    }
+
+    /**
+     * Waiting, said without a word.
+     *
+     * "Loading…" on every screen every ten seconds is a screen that reads as
+     * perpetually broken. Three dots breathing say the same thing and stop
+     * being read after the first time.
+     */
+    fun waiting(ctx: Context): LinearLayout {
+        val box = col(ctx)
+        box.gravity = Gravity.CENTER_HORIZONTAL
+        val p = dp(ctx, XL)
+        box.setPadding(0, p, 0, p)
+        val dots = row(ctx)
+        repeat(3) { index ->
+            if (index > 0) gap(ctx, dots, S)
+            val d = dot(ctx, faintColor(ctx), 6)
+            // A view animation rather than a ViewPropertyAnimator loop: this one
+            // runs in the draw pass and asks the main looper for nothing, so a
+            // screen left waiting is not a message posted every 400 ms for as
+            // long as the server stays quiet.
+            val pulse = AlphaAnimation(0.25f, 1f)
+            pulse.duration = 480
+            pulse.startOffset = index * 160L
+            pulse.repeatCount = Animation.INFINITE
+            pulse.repeatMode = Animation.REVERSE
+            d.startAnimation(pulse)
+            dots.addView(d)
+        }
+        box.addView(dots, lp(ctx, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        return box
+    }
+
+    /**
+     * A short fade as a screen's contents arrive.
+     *
+     * Everything here is rebuilt rather than updated, so a reload is a page
+     * blinking out and another one appearing in its place. A tenth of a second
+     * of fade turns that into the same page changing, which is what it is.
+     */
+    fun arrive(view: View) {
+        view.alpha = 0f
+        view.animate().alpha(1f).setDuration(120).start()
     }
 
     /** Layout params for a child of a LinearLayout, in dp (or MATCH/WRAP constants). */
@@ -275,6 +500,7 @@ object Ui {
             MEDIUM
         )
         t.gravity = Gravity.CENTER
+        t.maxLines = 1
         val resting =
             if (primary) rounded(accent(ctx), 9, ctx)
             else rounded(insetColor(ctx), 9, ctx, strokeColor(ctx))
@@ -295,12 +521,16 @@ object Ui {
     fun quiet(ctx: Context, label: String, onClick: () -> Unit): TextView {
         val t = text(ctx, label, 13f, dimColor(ctx), MEDIUM)
         t.gravity = Gravity.CENTER
+        t.maxLines = 1
         t.background = pressable(
             ctx, rounded(Color.TRANSPARENT, 9, ctx), color(ctx, R.color.pressed), 9
         )
         val px = dp(ctx, 10)
         val py = dp(ctx, S)
         t.setPadding(px, py, px, py)
+        // Same height as a real button: a word he has to aim at is worse than
+        // one in a box, not better, and these sit right beside Start and Stop.
+        t.minHeight = dp(ctx, 36)
         t.isClickable = true
         t.setOnClickListener { onClick() }
         return t
@@ -330,6 +560,7 @@ object Ui {
                 MEDIUM
             )
             seg.gravity = Gravity.CENTER
+            seg.maxLines = 1
             seg.background =
                 if (on) rounded(accent(ctx), 8, ctx)
                 else pressable(ctx, rounded(Color.TRANSPARENT, 8, ctx), color(ctx, R.color.pressed), 8)
@@ -341,6 +572,20 @@ object Ui {
             strip.addView(seg)
         }
         return strip
+    }
+
+    /**
+     * Wraps a strip that may be wider than the space it is given.
+     *
+     * Four speed names do not fit across half a screen, and a strip that
+     * reflows to fit is a strip whose segments move under his finger. It
+     * scrolls instead, which is what the printer picker has always done.
+     */
+    fun strip(ctx: Context, child: View): HorizontalScrollView {
+        val s = HorizontalScrollView(ctx)
+        s.isHorizontalScrollBarEnabled = false
+        s.addView(child)
+        return s
     }
 
     fun input(ctx: Context, hint: String, value: String = ""): EditText {

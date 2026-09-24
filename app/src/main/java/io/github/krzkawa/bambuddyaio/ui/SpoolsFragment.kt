@@ -22,6 +22,7 @@ class SpoolsFragment : BaseFragment() {
     private var spools: List<JSONObject> = emptyList()
     private var filter = ""
     private var showArchived = false
+    private var loadError: Throwable? = null
 
     override fun build(ctx: Context) {
         screenAction("Reload") { load() }
@@ -57,13 +58,17 @@ class SpoolsFragment : BaseFragment() {
 
     private fun load() {
         list.removeAllViews()
-        context?.let { list.addView(Ui.dim(it, "Loading…")) }
+        context?.let { list.addView(waiting(it)) }
+        loadError = null
         val includeArchived = showArchived
         background({ Repo.api.spools(includeArchived) }) { result ->
             result.onSuccess { spools = it.objects() }
             result.onFailure {
                 spools = emptyList()
-                toast(it.message ?: "Could not load your spools")
+                // A failure used to be a toast over an empty list, which is
+                // gone in three seconds and leaves a screen that looks like an
+                // empty inventory rather than a server that did not answer.
+                loadError = it
             }
             render()
         }
@@ -73,10 +78,18 @@ class SpoolsFragment : BaseFragment() {
         val ctx = context ?: return
         list.removeAllViews()
 
+        loadError?.let {
+            list.addView(failed(ctx, it, "your spools") { load() })
+            return
+        }
+
         val shown = spools.filter { Spools.matches(it, filter) }
 
         if (shown.isEmpty()) {
-            list.addView(empty(ctx, if (spools.isEmpty()) "No spools yet." else "Nothing matches that."))
+            list.addView(
+                if (spools.isEmpty()) empty(ctx, "No spools yet.", "Scan a spool tag to add one.")
+                else empty(ctx, "Nothing matches that.", "Try part of a material, colour or brand.")
+            )
             return
         }
 
@@ -85,10 +98,11 @@ class SpoolsFragment : BaseFragment() {
         list.addView(count)
         list.addView(Ui.space(ctx, Ui.S))
 
-        for (spool in shown) {
-            list.addView(row(ctx, spool), Ui.wide(ctx))
-            list.addView(Ui.space(ctx, 6))
-        }
+        // Two columns of spools rather than one: an inventory is the screen
+        // with the most rows in the app and the least on each of them.
+        val grid = Ui.grid(ctx, shown.map { row(ctx, it) as View }, columns(ctx))
+        list.addView(grid, Ui.wide(ctx))
+        Ui.arrive(grid)
     }
 
     private fun row(ctx: Context, spool: JSONObject): LinearLayout {
@@ -103,8 +117,20 @@ class SpoolsFragment : BaseFragment() {
         Ui.gap(ctx, line, Ui.M)
 
         val info = Ui.col(ctx)
-        info.addView(Ui.body(ctx, Assign.spoolName(spool)))
-        info.addView(Ui.tiny(ctx, Spools.summary(spool)))
+        val narrow = columns(ctx) > 1
+        val name = Ui.body(
+            ctx, if (narrow) Assign.shortSpoolName(spool) else Assign.spoolName(spool)
+        )
+        name.maxLines = 1
+        name.ellipsize = android.text.TextUtils.TruncateAt.END
+        info.addView(name)
+        val brand = spool.str("brand").takeIf { narrow }
+        val summary = Ui.tiny(
+            ctx, listOfNotNull(brand, Spools.summary(spool)).joinToString(" · ")
+        )
+        summary.maxLines = 1
+        summary.ellipsize = android.text.TextUtils.TruncateAt.END
+        info.addView(summary)
         line.addView(info, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         if (Spools.isArchived(spool)) {

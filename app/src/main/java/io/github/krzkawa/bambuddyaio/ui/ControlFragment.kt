@@ -22,6 +22,15 @@ class ControlFragment : BaseFragment() {
     private var signature = ""
 
     /**
+     * True when the sections are sitting two to a row.
+     *
+     * Half a screen is not enough for a reading and four buttons beside it, so
+     * the rows that carry controls stack them under the reading instead — which
+     * on a phone this size also makes them a good deal easier to hit.
+     */
+    private var paired = false
+
+    /**
      * Everything on the card that changes with every poll, updated in place.
      *
      * A degree ticking past used to be part of the rebuild signature, so the
@@ -81,21 +90,44 @@ class ControlFragment : BaseFragment() {
         body.removeAllViews()
 
         if (id < 0 || status == null) {
-            body.addView(empty(ctx, "The server cannot reach this printer."))
+            body.addView(
+                empty(
+                    ctx,
+                    "The server cannot reach this printer.",
+                    "It is usually off, or off the network."
+                )
+            )
             return
         }
 
-        body.addView(printSection(ctx, id, status))
-        body.addView(Ui.space(ctx, Ui.M))
-        body.addView(tempSection(ctx, id, status))
-        body.addView(Ui.space(ctx, Ui.M))
-        body.addView(fanSection(ctx, id, status))
-        body.addView(Ui.space(ctx, Ui.M))
-        body.addView(machineSection(ctx, id, status))
-
+        // A fault is the reason he walked over, so it stays above everything
+        // and keeps the full width.
         if (faults.isNotEmpty()) {
+            body.addView(errorSection(ctx, id, faults), Ui.wide(ctx))
             body.addView(Ui.space(ctx, Ui.M))
-            body.addView(errorSection(ctx, id, faults))
+        }
+
+        // Four panels in one column meant three of them were under the fold on
+        // a screen that is nearly twice as wide as it is tall. Side by side,
+        // the print and the heaters — the two he actually came for — are both
+        // in view without a scroll.
+        paired = columns(ctx, minColumnDp = 240) > 1
+        val sections = listOf(
+            printSection(ctx, id, status) as android.view.View to 3,
+            tempSection(ctx, id, status) as android.view.View to 3,
+            fanSection(ctx, id, status) as android.view.View to 2,
+            machineSection(ctx, id, status) as android.view.View to 2
+        )
+        if (paired) {
+            // Not an even split: the print card carries the speed strip, which
+            // is four words wide, and the heaters beside it need only a reading
+            // and four keys.
+            body.addView(Ui.dealt(ctx, sections, Ui.M, 1.2f, 0.8f), Ui.wide(ctx))
+        } else {
+            sections.forEachIndexed { index, (view, _) ->
+                if (index > 0) body.addView(Ui.space(ctx, Ui.M))
+                body.addView(view, Ui.wide(ctx))
+            }
         }
 
         live.forEach { it(status) }
@@ -125,14 +157,14 @@ class ControlFragment : BaseFragment() {
         }
 
         card.addView(Ui.space(ctx, Ui.M))
-        val row = Ui.row(ctx)
-        if (state == "PAUSE") {
-            row.addView(Ui.button(ctx, "Resume", primary = true) { command("Resume") { Repo.api.resume(id) } })
-        } else {
-            row.addView(Ui.button(ctx, "Pause") { command("Pause") { Repo.api.pause(id) } })
-        }
-        gap(ctx, row)
-        row.addView(Ui.button(ctx, "Stop") {
+        val actions = ArrayList<android.view.View>()
+        actions.add(
+            if (state == "PAUSE")
+                Ui.button(ctx, "Resume", primary = true) { command("Resume") { Repo.api.resume(id) } }
+            else
+                Ui.button(ctx, "Pause") { command("Pause") { Repo.api.pause(id) } }
+        )
+        actions.add(Ui.button(ctx, "Stop") {
             androidx.appcompat.app.AlertDialog.Builder(ctx)
                 .setTitle("Stop this print?")
                 .setMessage("The printer cannot resume a stopped print.")
@@ -140,29 +172,38 @@ class ControlFragment : BaseFragment() {
                 .setNegativeButton("Keep printing", null)
                 .show()
         })
-        gap(ctx, row)
-        row.addView(Ui.button(ctx, "Plate cleared") { command("Clear plate") { Repo.api.clearPlate(id) } })
+        actions.add(Ui.button(ctx, "Plate cleared") { command("Clear plate") { Repo.api.clearPlate(id) } })
 
         // Only offered on a plate the printer says holds several objects: with
         // one object there is nothing to save by skipping it.
         if ((status.int("printable_objects_count") ?: 0) > 1) {
-            gap(ctx, row)
-            row.addView(Ui.button(ctx, "Skip an object") { chooseObject(ctx, id) })
+            actions.add(Ui.button(ctx, "Skip an object") { chooseObject(ctx, id) })
         }
-        card.addView(row, Ui.wide(ctx))
+        // Four buttons will not sit on half a screen, and one that runs off the
+        // edge of the card is one he cannot press. Two by two instead.
+        card.addView(Ui.grid(ctx, actions, if (paired) 2 else actions.size, Ui.S), Ui.wide(ctx))
 
         card.addView(Ui.space(ctx, Ui.M))
         card.addView(Ui.divider(ctx))
         card.addView(Ui.space(ctx, Ui.M))
-        val speedRow = Ui.row(ctx)
-        speedRow.addView(Ui.heading(ctx, "Speed"))
-        Ui.push(ctx, speedRow)
         val labels = listOf("Silent", "Standard", "Sport", "Ludicrous")
         val current = (status.int("speed_level") ?: 2).coerceIn(1, 4)
-        speedRow.addView(Ui.segmented(ctx, labels, current - 1) { index ->
+        val speed = Ui.segmented(ctx, labels, current - 1) { index ->
             command("Speed ${labels[index]}") { Repo.api.setSpeed(id, index + 1) }
-        })
-        card.addView(speedRow, Ui.wide(ctx))
+        }
+        if (paired) {
+            card.addView(Ui.heading(ctx, "Speed"))
+            card.addView(
+                Ui.strip(ctx, speed),
+                Ui.lp(ctx, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            )
+        } else {
+            val speedRow = Ui.row(ctx)
+            speedRow.addView(Ui.heading(ctx, "Speed"))
+            Ui.push(ctx, speedRow)
+            speedRow.addView(speed)
+            card.addView(speedRow, Ui.wide(ctx))
+        }
         return card
     }
 
@@ -249,22 +290,39 @@ class ControlFragment : BaseFragment() {
     }
 
     private fun heater(ctx: Context, label: String, key: String, max: Int, send: (Int) -> Unit): LinearLayout {
-        val row = Ui.row(ctx)
-        row.setPadding(0, Ui.dp(ctx, Ui.S), 0, Ui.dp(ctx, Ui.S))
         val stat = Ui.stat(ctx, label, "—")
-        row.addView(stat, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-
         val h = Heater(ctx, label, key, max, stat, send)
         live.add { status -> h.show(status) }
 
-        row.addView(Ui.quiet(ctx, "Off") { h.set(0) })
-        gap(ctx, row, 4)
-        row.addView(Ui.button(ctx, "−10") { h.nudge(-10) })
-        gap(ctx, row, 4)
-        row.addView(Ui.button(ctx, "+10") { h.nudge(10) })
-        gap(ctx, row, 4)
-        row.addView(Ui.button(ctx, "Set") { typeTemperature(ctx, h) })
-        return row
+        val labels = listOf<android.view.View>(
+            Ui.quiet(ctx, "Off") { h.set(0) },
+            Ui.button(ctx, "−10") { h.nudge(-10) },
+            Ui.button(ctx, "+10") { h.nudge(10) },
+            Ui.button(ctx, "Set") { typeTemperature(ctx, h) }
+        )
+        val keys = if (paired) Ui.keys(ctx, labels) else Ui.row(ctx).also { r ->
+            labels.forEachIndexed { index, b ->
+                if (index > 0) gap(ctx, r, 4)
+                r.addView(b)
+            }
+        }
+
+        return if (paired) {
+            // Reading over its keys, because "219° → 220°" and four buttons do
+            // not both fit across half a screen.
+            val stack = Ui.col(ctx)
+            stack.setPadding(0, Ui.dp(ctx, Ui.S), 0, Ui.dp(ctx, Ui.S))
+            stack.addView(stat, Ui.wide(ctx))
+            stack.addView(Ui.space(ctx, Ui.S))
+            stack.addView(keys, Ui.wide(ctx))
+            stack
+        } else {
+            val row = Ui.row(ctx)
+            row.setPadding(0, Ui.dp(ctx, Ui.S), 0, Ui.dp(ctx, Ui.S))
+            row.addView(stat, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(keys)
+            row
+        }
     }
 
     /** The whole point of item 6: one number, one command, no counting taps. */
@@ -368,16 +426,30 @@ class ControlFragment : BaseFragment() {
 
     private fun fanRow(ctx: Context, id: Int, label: String, fan: String, speedKey: String): LinearLayout {
         val row = Ui.row(ctx)
-        row.setPadding(0, Ui.dp(ctx, Ui.S), 0, Ui.dp(ctx, Ui.S))
         val stat = Ui.stat(ctx, label, "—")
         live.add { status ->
             val speed = status?.int(speedKey)
             Ui.setStat(stat, if (speed == null) "—" else "$speed%")
         }
+        val buttons = listOf(0, 50, 100).map { value ->
+            Ui.button(ctx, "$value%") {
+                command("$label $value%") { Repo.api.setFan(id, fan, value) }
+            } as android.view.View
+        }
+        if (paired) {
+            // Reading over its keys, as the heaters do, for the same reason.
+            val stack = Ui.col(ctx)
+            stack.setPadding(0, Ui.dp(ctx, Ui.S), 0, Ui.dp(ctx, Ui.S))
+            stack.addView(stat, Ui.wide(ctx))
+            stack.addView(Ui.space(ctx, Ui.S))
+            stack.addView(Ui.keys(ctx, buttons), Ui.wide(ctx))
+            return stack
+        }
+        row.setPadding(0, Ui.dp(ctx, Ui.S), 0, Ui.dp(ctx, Ui.S))
         row.addView(stat, Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        listOf(0, 50, 100).forEach { value ->
-            row.addView(Ui.button(ctx, "$value%") { command("$label $value%") { Repo.api.setFan(id, fan, value) } })
-            gap(ctx, row, 4)
+        buttons.forEachIndexed { index, b ->
+            if (index > 0) gap(ctx, row, 4)
+            row.addView(b)
         }
         return row
     }
@@ -385,23 +457,22 @@ class ControlFragment : BaseFragment() {
     private fun machineSection(ctx: Context, id: Int, status: JSONObject): LinearLayout {
         val card = Ui.card(ctx)
         card.addView(Ui.heading(ctx, "Machine"))
-        val row = Ui.row(ctx)
         val lightOn = status.bool("chamber_light")
-        row.addView(Ui.button(ctx, if (lightOn) "Light off" else "Light on", primary = !lightOn) {
-            command("Light") { Repo.api.setLight(id, !lightOn) }
-        })
-        gap(ctx, row)
-        row.addView(Ui.button(ctx, "Home axes") {
-            androidx.appcompat.app.AlertDialog.Builder(ctx)
-                .setTitle("Home the axes?")
-                .setMessage("The printer will run its full homing sequence. Do not do this mid-print.")
-                .setPositiveButton("Home") { _, _ -> command("Home") { Repo.api.homeAxes(id) } }
-                .setNegativeButton("Cancel", null)
-                .show()
-        })
-        gap(ctx, row)
-        row.addView(Ui.button(ctx, "Refresh") { command("Refresh") { Repo.api.refreshStatus(id) } })
-        card.addView(row, Ui.wide(ctx))
+        val buttons = listOf<android.view.View>(
+            Ui.button(ctx, if (lightOn) "Light off" else "Light on", primary = !lightOn) {
+                command("Light") { Repo.api.setLight(id, !lightOn) }
+            },
+            Ui.button(ctx, "Home axes") {
+                androidx.appcompat.app.AlertDialog.Builder(ctx)
+                    .setTitle("Home the axes?")
+                    .setMessage("The printer will run its full homing sequence. Do not do this mid-print.")
+                    .setPositiveButton("Home") { _, _ -> command("Home") { Repo.api.homeAxes(id) } }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            },
+            Ui.button(ctx, "Refresh") { command("Refresh") { Repo.api.refreshStatus(id) } }
+        )
+        card.addView(Ui.grid(ctx, buttons, if (paired) 2 else 3, Ui.S), Ui.wide(ctx))
 
         card.addView(Ui.space(ctx, Ui.M))
         val info = Ui.row(ctx)

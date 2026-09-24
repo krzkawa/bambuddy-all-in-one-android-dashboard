@@ -23,12 +23,12 @@ class StatsFragment : BaseFragment() {
     private fun load() {
         val ctx = context ?: return
         body.removeAllViews()
-        body.addView(empty(ctx, "Loading…"))
+        body.addView(waiting(ctx))
         background({ Repo.api.statistics() }) { result ->
             result.onSuccess { render(it) }
-            result.onFailure {
+            result.onFailure { error ->
                 body.removeAllViews()
-                body.addView(empty(ctx, it.message ?: "Could not load the statistics"))
+                body.addView(failed(ctx, error, "the statistics") { load() })
             }
         }
     }
@@ -75,13 +75,19 @@ class StatsFragment : BaseFragment() {
         totals.addView(row2, wide(ctx))
         body.addView(totals)
 
-        breakdown(ctx, "By filament", stats.optJSONObject("prints_by_filament_type"))
-        breakdown(ctx, "By printer", stats.optJSONObject("prints_by_printer"))
+        val breakdowns = listOfNotNull(
+            breakdown(ctx, "By filament", stats.optJSONObject("prints_by_filament_type")),
+            breakdown(ctx, "By printer", stats.optJSONObject("prints_by_printer"))
+        )
+        if (breakdowns.isNotEmpty()) {
+            body.addView(Ui.space(ctx, Ui.M))
+            body.addView(Ui.grid(ctx, breakdowns, columns(ctx), Ui.M), wide(ctx))
+        }
+        Ui.arrive(body)
     }
 
-    private fun breakdown(ctx: Context, title: String, data: JSONObject?) {
-        if (data == null || data.length() == 0) return
-        body.addView(Ui.space(ctx, Ui.M))
+    private fun breakdown(ctx: Context, title: String, data: JSONObject?): LinearLayout? {
+        if (data == null || data.length() == 0) return null
         val card = Ui.card(ctx)
         card.addView(Ui.heading(ctx, title))
         val keys = data.keys()
@@ -95,7 +101,10 @@ class StatsFragment : BaseFragment() {
         }
         for ((key, value) in entries.sortedByDescending { it.second }.take(8)) {
             val line = Ui.row(ctx)
-            line.addView(Ui.dim(ctx, key), Ui.lp(ctx, 104, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val name = Ui.dim(ctx, key)
+            name.maxLines = 1
+            name.ellipsize = android.text.TextUtils.TruncateAt.END
+            line.addView(name, Ui.lp(ctx, 72, ViewGroup.LayoutParams.WRAP_CONTENT))
             val bar = Bar(ctx, 4)
             bar.set(value.toDouble() / max)
             line.addView(bar.view, Ui.lp(ctx, 0, 4, 1f))
@@ -104,7 +113,7 @@ class StatsFragment : BaseFragment() {
             card.addView(line, wide(ctx))
             card.addView(Ui.space(ctx, Ui.S))
         }
-        body.addView(card)
+        return card
     }
 
     private fun gap(ctx: Context, row: LinearLayout) = Ui.gap(ctx, row, Ui.XL)

@@ -99,10 +99,21 @@ object Assign {
 
     /** Name a spool the way a person would say it out loud. */
     fun spoolName(spool: JSONObject): String {
+        val brand = spool.str("brand")
+        return listOfNotNull(brand, shortSpoolName(spool)).joinToString(" · ")
+    }
+
+    /**
+     * The same spool without its brand.
+     *
+     * Half the inventory is "Bambu Lab · …", so on a narrow row the brand eats
+     * the line and truncates away the two words that tell two spools apart.
+     * The brand moves to the line underneath instead of off the end.
+     */
+    fun shortSpoolName(spool: JSONObject): String {
         val material = spool.str("subtype") ?: spool.str("material") ?: "Filament"
         val colour = spool.str("color_name")
-        val brand = spool.str("brand")
-        return listOfNotNull(brand, material, colour).joinToString(" · ")
+        return listOfNotNull(material, colour).joinToString(" · ")
     }
 
     fun spoolRemaining(spool: JSONObject): String {

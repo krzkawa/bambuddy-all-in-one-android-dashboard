@@ -80,22 +80,86 @@ class Shots {
     /**
      * A stand-in Bambuddy, so the parts of a screen that come from a request
      * rather than from the status poll are in the picture too.
+     *
+     * Every screen that fetches gets something worth looking at: a list screen
+     * laid out with one row is not a list screen, and most of the decisions
+     * this harness exists to check only go wrong at ten rows.
      */
     private fun fakeServer(): Int {
-        val queue = JSONArray()
-            .put(JSONObject().put("id", 11).put("status", "printing")
-                .put("archive_name", "bracket_v3_plate.gcode.3mf").put("printer_id", 1))
-            .put(JSONObject().put("id", 12).put("status", "pending")
-                .put("archive_name", "hinge_left_x4.3mf").put("printer_id", 1)
-                .put("print_time_seconds", 4920).put("filament_used_grams", 38.0))
-            .put(JSONObject().put("id", 13).put("status", "pending")
-                .put("archive_name", "vase_spiral.3mf").put("printer_id", 1)
-                .put("filament_short", true))
-            .put(JSONObject().put("id", 14).put("status", "completed")
-                .put("archive_name", "old_and_done.3mf").put("printer_id", 1))
+        val routes = HashMap<String, String>()
+
+        routes["queue"] = JSONArray()
+            .put(queued(11, "printing", "bracket_v3_plate.gcode.3mf"))
+            .put(queued(12, "pending", "hinge_left_x4.3mf").put("print_time_seconds", 4920)
+                .put("filament_used_grams", 38.0))
+            .put(queued(13, "pending", "vase_spiral.3mf").put("filament_short", true))
+            .put(queued(14, "pending", "enclosure_panel_front.3mf")
+                .put("print_time_seconds", 19800).put("filament_used_grams", 214.0))
+            .put(queued(15, "completed", "old_and_done.3mf"))
+            .toString()
+
+        routes["inventory/spools"] = JSONArray().apply {
+            val kinds = listOf(
+                Triple("Bambu Lab", "PLA Basic", "Jade White") to "F5F5F5FF",
+                Triple("Bambu Lab", "PLA Matte", "Charcoal") to "2B2B2BFF",
+                Triple("Polymaker", "PETG HF", "Sky Blue") to "1E88E5FF",
+                Triple("Bambu Lab", "ABS", "Fire Red") to "E53935FF",
+                Triple("Sunlu", "PLA Silk", "Copper") to "B87333FF",
+                Triple("Bambu Lab", "PLA Basic", "Bambu Green") to "00AE42FF",
+                Triple("Polymaker", "PA6-CF", "Black") to "101010FF",
+                Triple("Bambu Lab", "TPU 95A", "Neon Yellow") to "E8F326FF"
+            )
+            kinds.forEachIndexed { index, (name, colour) ->
+                val (brand, material, shade) = name
+                put(
+                    JSONObject()
+                        .put("id", 100 + index).put("brand", brand).put("subtype", material)
+                        .put("color_name", shade).put("rgba", colour)
+                        .put("label_weight", 1000.0)
+                        .put("weight_used", 60.0 + index * 97.0)
+                        .put("storage_location", if (index % 3 == 0) "Drybox 1" else "Shelf")
+                )
+            }
+        }.toString()
+
+        routes["archives/slim"] = JSONArray().apply {
+            val runs = listOf(
+                Triple("bracket_v2_plate.3mf", "success", "PLA") to 214,
+                Triple("hinge_left_x4.3mf", "success", "PETG") to 96,
+                Triple("vase_spiral.3mf", "failed", "PLA") to 31,
+                Triple("gridfinity_6x.3mf", "success", "PLA") to 402,
+                Triple("clip_test.3mf", "success", "TPU") to 12,
+                Triple("enclosure_panel.3mf", "failed", "ABS") to 188
+            )
+            runs.forEachIndexed { index, (what, grams) ->
+                val (name, outcome, material) = what
+                put(
+                    JSONObject().put("print_name", name).put("status", outcome)
+                        .put("filament_type", material).put("filament_used_grams", grams.toDouble())
+                        .put("actual_time_seconds", (grams * 90).toLong())
+                        .put("filament_color", listOf("F5F5F5FF", "1E88E5FF", "E53935FF")[index % 3])
+                        .put("completed_at", "2026-09-2${3 - index / 3}T1${index}:24:00")
+                )
+            }
+        }.toString()
+
+        routes["archives/stats"] = JSONObject()
+            .put("total_prints", 148).put("successful_prints", 131).put("failed_prints", 17)
+            .put("total_print_time_hours", 612.5).put("total_filament_grams", 24380.0)
+            .put("total_cost", 486.20).put("total_energy_kwh", 92.4)
+            .put("prints_by_filament_type", JSONObject()
+                .put("PLA", 96).put("PETG", 28).put("ABS", 14).put("TPU", 6).put("PA6-CF", 4))
+            .put("prints_by_printer", JSONObject().put("X1 Carbon", 101).put("P1S", 47))
+            .toString()
+
+        routes["system/info"] = JSONObject().put("version", "1.9.2").toString()
+        routes["inventory/locations"] = JSONArray()
+            .put(JSONObject().put("name", "Drybox 1")).put(JSONObject().put("name", "Shelf"))
+            .toString()
+
         // A bare socket rather than com.sun.net.httpserver, which the android.jar
         // these tests compile against does not carry.
-        val socket = java.net.ServerSocket(0, 4, java.net.InetAddress.getLoopbackAddress())
+        val socket = java.net.ServerSocket(0, 8, java.net.InetAddress.getLoopbackAddress())
         Thread {
             while (!socket.isClosed) {
                 try {
@@ -106,7 +170,8 @@ class Shots {
                             val header = reader.readLine()
                             if (header.isNullOrBlank()) break
                         }
-                        val body = if (request.contains("queue")) queue.toString() else "[]"
+                        val body = routes.entries
+                            .firstOrNull { request.contains(it.key) }?.value ?: "[]"
                         val bytes = body.toByteArray()
                         client.getOutputStream().apply {
                             write(
@@ -126,6 +191,10 @@ class Shots {
         }.apply { isDaemon = true }.start()
         return socket.localPort
     }
+
+    private fun queued(id: Int, status: String, name: String) =
+        JSONObject().put("id", id).put("status", status)
+            .put("archive_name", name).put("printer_id", 1)
 
     @Test
     fun shoot() {
@@ -150,8 +219,8 @@ class Shots {
         out.mkdirs()
 
         listOf(
-            0 to "printers", 1 to "control", 3 to "ams",
-            4 to "scan", 6 to "queue", 8 to "stats", 9 to "settings"
+            0 to "printers", 1 to "control", 2 to "camera", 3 to "ams", 4 to "scan",
+            5 to "spools", 6 to "queue", 7 to "history", 8 to "stats", 9 to "settings"
         ).forEach { (tab, name) ->
             activity.showTab(tab)
             shadowOf(Looper.getMainLooper()).idle()

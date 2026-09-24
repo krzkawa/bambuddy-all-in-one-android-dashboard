@@ -96,13 +96,32 @@ abstract class BaseFragment : Fragment() {
     /** Full width, own height. */
     protected fun wide(ctx: Context): LinearLayout.LayoutParams = Ui.wide(ctx)
 
-    /** What a screen says when it has nothing to show yet. */
-    protected fun empty(ctx: Context, message: String): LinearLayout {
-        val box = Ui.col(ctx)
-        box.setPadding(0, Ui.dp(ctx, Ui.L), 0, Ui.dp(ctx, Ui.L))
-        box.addView(Ui.dim(ctx, message))
-        return box
-    }
+    /** What a screen says when it has nothing to show. */
+    protected fun empty(ctx: Context, message: String, detail: String? = null): LinearLayout =
+        Ui.notice(ctx, message, detail)
+
+    /** What a screen shows while the first answer is still on its way. */
+    protected fun waiting(ctx: Context): LinearLayout = Ui.waiting(ctx)
+
+    /**
+     * What a screen says when the load failed.
+     *
+     * Always with a way out of it: the server is on his own network and half
+     * of these are a printer that was off, so the answer is nearly always to
+     * press it again rather than to go and read a log.
+     */
+    protected fun failed(ctx: Context, error: Throwable?, what: String, retry: () -> Unit): LinearLayout =
+        Ui.notice(
+            ctx,
+            "Could not load $what",
+            error?.message?.takeIf { it.isNotBlank() },
+            "Try again",
+            retry
+        )
+
+    /** How many columns of list rows this screen has room for. */
+    protected fun columns(ctx: Context, minColumnDp: Int = 240): Int =
+        Ui.listColumns(ctx, minColumnDp)
 }
 
 /**
