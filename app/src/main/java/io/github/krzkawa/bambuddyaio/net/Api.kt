@@ -381,6 +381,97 @@ class Api(private val prefs: Prefs) {
 
     fun systemInfo(): JSONObject = getObject("system/info")
 
+    // ---------------------------------------------------------- machine extras
+
+    /**
+     * The plug that feeds this printer, or null when none is assigned.
+     *
+     * The server picks the main one when several share a printer — the outlet
+     * the printer is actually on, ahead of a fan or a script (`smart_plugs.py`,
+     * `_main_plug_rank`) — and answers a bare JSON `null` when there is none.
+     */
+    fun plugForPrinter(printerId: Int): JSONObject? {
+        val text = getRaw("smart-plugs/by-printer/$printerId").trim()
+        if (text.isEmpty() || text == "null") return null
+        return JSONObject(text)
+    }
+
+    /**
+     * Asks the plug itself: `state` ON/OFF/null, `reachable`, and an `energy`
+     * object when the plug meters (`power` in watts, `today` in kWh). This is a
+     * round trip from the server to the device, not a cached value.
+     */
+    fun plugStatus(plugId: Int): JSONObject = getObject("smart-plugs/$plugId/status")
+
+    /** [action] is "on" or "off". MQTT plugs are monitor-only and answer 400. */
+    fun plugControl(plugId: Int, action: String) {
+        post("smart-plugs/$plugId/control", JSONObject().put("action", action))
+    }
+
+    /** Every active printer's maintenance items, each with whether it is due. */
+    fun maintenanceOverview(): JSONArray = getArray("maintenance/overview")
+
+    /** Resets one item's counter to now. The body is required, even empty. */
+    fun maintenancePerform(itemId: Int) {
+        post("maintenance/items/$itemId/perform", JSONObject())
+    }
+
+    /** Current and latest firmware per printer, from Bambu Lab's public page. */
+    fun firmwareUpdates(): JSONObject = getObject("firmware/updates")
+
+    /**
+     * Changes the nozzle-to-bed gap by [distance] mm: negative closes it. The
+     * server flips the sign for A1-family bed-slingers, so this means the same
+     * thing on every model.
+     */
+    fun bedJog(printerId: Int, distance: Double) {
+        post("printers/$printerId/bed-jog", null, "distance" to distance)
+    }
+
+    fun xyJog(printerId: Int, x: Double, y: Double) {
+        post("printers/$printerId/xy-jog", null, "x" to x, "y" to y)
+    }
+
+    /** Positive extrudes, negative retracts. The firmware refuses it cold. */
+    fun extruderJog(printerId: Int, distance: Double) {
+        post("printers/$printerId/extruder-jog", null, "distance" to distance)
+    }
+
+    /** At least one must be true, or the server answers 400. */
+    fun calibrate(
+        printerId: Int,
+        bedLeveling: Boolean,
+        vibration: Boolean,
+        motorNoise: Boolean,
+        nozzleOffset: Boolean,
+        highTempBed: Boolean
+    ) {
+        post("printers/$printerId/calibration", null,
+            "bed_leveling" to bedLeveling, "vibration" to vibration,
+            "motor_noise" to motorNoise, "nozzle_offset" to nozzleOffset,
+            "high_temp_heatbed" to highTempBed)
+    }
+
+    /**
+     * Turns one of the printer's camera checks on or off.
+     *
+     * The route defaults `sensitivity` to "medium" and sends it to the printer
+     * with every toggle, which would quietly reset a sensitivity set on the
+     * printer. "never_halt" is the one value the server does not forward
+     * (`bambu_mqtt.py`, `set_xcam_option`), so it is what "leave it alone"
+     * looks like on the wire.
+     */
+    fun setPrintOption(printerId: Int, module: String, enabled: Boolean, sensitivity: String? = null) {
+        post("printers/$printerId/print-options", null,
+            "module_name" to module, "enabled" to enabled,
+            "sensitivity" to (sensitivity ?: "never_halt"))
+    }
+
+    /** "cooling" or "heating", on the models with a switchable air duct. */
+    fun setAirductMode(printerId: Int, mode: String) {
+        post("printers/$printerId/airduct-mode", null, "mode" to mode)
+    }
+
     // ----------------------------------------------------------------- camera
 
     /**
