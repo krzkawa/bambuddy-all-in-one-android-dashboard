@@ -94,5 +94,7 @@ dependencies {
     testImplementation("org.json:json:20231013")
     if (project.hasProperty("shots")) {
         testImplementation("org.robolectric:robolectric:4.14.1")
+        // A stand-in Bambuddy for LiveCheck, which drives the real socket code.
+        testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     }
 }

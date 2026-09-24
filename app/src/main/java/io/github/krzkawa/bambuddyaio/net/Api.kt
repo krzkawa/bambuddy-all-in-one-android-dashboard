@@ -10,6 +10,8 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -374,12 +376,187 @@ class Api(private val prefs: Prefs) {
     fun queueStart(itemId: Int, skipFilamentCheck: Boolean = false): JSONObject =
         postObject("queue/$itemId/start", null, "skip_filament_check" to skipFilamentCheck)
 
+    // ------------------------------------------------- printing from the phone
+
+    /**
+     * Puts a file or an old print in the queue. The only way left to start a
+     * print: `/library/files/{id}/print` and `/archives/{id}/reprint` now
+     * answer 410 and point here.
+     */
+    fun queueAdd(payload: JSONObject): JSONObject = postObject("queue/", payload)
+
+    /** Edits a pending item. The server applies exactly the keys sent, nulls included. */
+    fun queueUpdate(itemId: Int, payload: JSONObject): JSONObject =
+        patchObject("queue/$itemId", payload)
+
+    /**
+     * Renumbers pending items. Positions are per printer, and the server
+     * refuses a payload that gives two items the same one.
+     */
+    fun queueReorder(order: List<Pair<Int, Int>>) {
+        val items = JSONArray()
+        for ((id, position) in order) items.put(JSONObject().put("id", id).put("position", position))
+        post("queue/reorder", JSONObject().put("items", items))
+    }
+
+    /** Stops the print a queue item is running, and marks the item cancelled. */
+    fun queueStop(itemId: Int) { post("queue/$itemId/stop") }
+
+    /** Every folder, as a tree: each one carries its `children`. */
+    fun libraryFolders(): JSONArray = getArray("library/folders")
+
+    /** Files directly in [folderId], or at the top level when it is null. */
+    fun libraryFiles(folderId: Int?): JSONArray = getArray("library/files/", "folder_id" to folderId)
+
+    /** The plates in a 3MF, each with its own time, weight and filaments. */
+    fun libraryPlates(fileId: Int): JSONObject = getObject("library/files/$fileId/plates")
+
+    /** What one plate of a file needs loaded: slot, type, colour, grams. */
+    fun libraryFilaments(fileId: Int, plateId: Int?): JSONObject =
+        getObject("library/files/$fileId/filament-requirements", "plate_id" to plateId)
+
+    /**
+     * Archived prints, newest first, with their ids. The slim listing the
+     * History screen used to read has no id, so nothing on it could be opened.
+     */
+    fun archiveList(limit: Int = 40): JSONArray = getArray("archives/", "limit" to limit)
+
+    fun archive(archiveId: Int): JSONObject = getObject("archives/$archiveId")
+
+    fun archivePlates(archiveId: Int): JSONObject = getObject("archives/$archiveId/plates")
+
+    fun archiveFilaments(archiveId: Int, plateId: Int?): JSONObject =
+        getObject("archives/$archiveId/filament-requirements", "plate_id" to plateId)
+
+    /**
+     * Picture routes. Like the camera, they were built for browser `<img>`
+     * tags and take the stream token in the query string rather than a header.
+     */
+    fun libraryThumbUrl(fileId: Int, token: String?): HttpUrl =
+        url("library/files/$fileId/thumbnail", "token" to token?.ifBlank { null })
+
+    fun libraryPlateThumbUrl(fileId: Int, plate: Int, token: String?): HttpUrl =
+        url("library/files/$fileId/plate-thumbnail/$plate", "token" to token?.ifBlank { null })
+
+    fun archiveThumbUrl(archiveId: Int, token: String?): HttpUrl =
+        url("archives/$archiveId/thumbnail", "token" to token?.ifBlank { null })
+
+    fun archivePlateThumbUrl(archiveId: Int, plate: Int, token: String?): HttpUrl =
+        url("archives/$archiveId/plate-thumbnail/$plate", "token" to token?.ifBlank { null })
+
+    fun archivePhotoUrl(archiveId: Int, filename: String, token: String?): HttpUrl =
+        url("archives/$archiveId/photos/$filename", "token" to token?.ifBlank { null })
+
+    /** Raw bytes of a picture, with the usual auth headers alongside the token. */
+    fun bytes(url: HttpUrl): ByteArray {
+        val response: Response = try {
+            client.newCall(req(url).get().build()).execute()
+        } catch (e: IOException) {
+            throw ApiError(0, e.message ?: "Cannot reach the server")
+        }
+        response.use {
+            if (!it.isSuccessful) throw ApiError(it.code, "Server returned ${it.code}")
+            return it.body?.bytes() ?: ByteArray(0)
+        }
+    }
+
     /** The slim listing: one row per print run, which is all the history screen shows. */
     fun archives(limit: Int = 40): JSONArray = getArray("archives/slim", "limit" to limit)
 
     fun statistics(): JSONObject = getObject("archives/stats")
 
     fun systemInfo(): JSONObject = getObject("system/info")
+
+    // ---------------------------------------------------------- machine extras
+
+    /**
+     * The plug that feeds this printer, or null when none is assigned.
+     *
+     * The server picks the main one when several share a printer — the outlet
+     * the printer is actually on, ahead of a fan or a script (`smart_plugs.py`,
+     * `_main_plug_rank`) — and answers a bare JSON `null` when there is none.
+     */
+    fun plugForPrinter(printerId: Int): JSONObject? {
+        val text = getRaw("smart-plugs/by-printer/$printerId").trim()
+        if (text.isEmpty() || text == "null") return null
+        return JSONObject(text)
+    }
+
+    /**
+     * Asks the plug itself: `state` ON/OFF/null, `reachable`, and an `energy`
+     * object when the plug meters (`power` in watts, `today` in kWh). This is a
+     * round trip from the server to the device, not a cached value.
+     */
+    fun plugStatus(plugId: Int): JSONObject = getObject("smart-plugs/$plugId/status")
+
+    /** [action] is "on" or "off". MQTT plugs are monitor-only and answer 400. */
+    fun plugControl(plugId: Int, action: String) {
+        post("smart-plugs/$plugId/control", JSONObject().put("action", action))
+    }
+
+    /** Every active printer's maintenance items, each with whether it is due. */
+    fun maintenanceOverview(): JSONArray = getArray("maintenance/overview")
+
+    /** Resets one item's counter to now. The body is required, even empty. */
+    fun maintenancePerform(itemId: Int) {
+        post("maintenance/items/$itemId/perform", JSONObject())
+    }
+
+    /** Current and latest firmware per printer, from Bambu Lab's public page. */
+    fun firmwareUpdates(): JSONObject = getObject("firmware/updates")
+
+    /**
+     * Changes the nozzle-to-bed gap by [distance] mm: negative closes it. The
+     * server flips the sign for A1-family bed-slingers, so this means the same
+     * thing on every model.
+     */
+    fun bedJog(printerId: Int, distance: Double) {
+        post("printers/$printerId/bed-jog", null, "distance" to distance)
+    }
+
+    fun xyJog(printerId: Int, x: Double, y: Double) {
+        post("printers/$printerId/xy-jog", null, "x" to x, "y" to y)
+    }
+
+    /** Positive extrudes, negative retracts. The firmware refuses it cold. */
+    fun extruderJog(printerId: Int, distance: Double) {
+        post("printers/$printerId/extruder-jog", null, "distance" to distance)
+    }
+
+    /** At least one must be true, or the server answers 400. */
+    fun calibrate(
+        printerId: Int,
+        bedLeveling: Boolean,
+        vibration: Boolean,
+        motorNoise: Boolean,
+        nozzleOffset: Boolean,
+        highTempBed: Boolean
+    ) {
+        post("printers/$printerId/calibration", null,
+            "bed_leveling" to bedLeveling, "vibration" to vibration,
+            "motor_noise" to motorNoise, "nozzle_offset" to nozzleOffset,
+            "high_temp_heatbed" to highTempBed)
+    }
+
+    /**
+     * Turns one of the printer's camera checks on or off.
+     *
+     * The route defaults `sensitivity` to "medium" and sends it to the printer
+     * with every toggle, which would quietly reset a sensitivity set on the
+     * printer. "never_halt" is the one value the server does not forward
+     * (`bambu_mqtt.py`, `set_xcam_option`), so it is what "leave it alone"
+     * looks like on the wire.
+     */
+    fun setPrintOption(printerId: Int, module: String, enabled: Boolean, sensitivity: String? = null) {
+        post("printers/$printerId/print-options", null,
+            "module_name" to module, "enabled" to enabled,
+            "sensitivity" to (sensitivity ?: "never_halt"))
+    }
+
+    /** "cooling" or "heating", on the models with a switchable air duct. */
+    fun setAirductMode(printerId: Int, mode: String) {
+        post("printers/$printerId/airduct-mode", null, "mode" to mode)
+    }
 
     // ----------------------------------------------------------------- camera
 
@@ -414,4 +591,32 @@ class Api(private val prefs: Prefs) {
             override fun onResponse(call: Call, response: Response) = response.close()
         })
     }
+
+    // ------------------------------------------------------------ live updates
+
+    /**
+     * A short-lived token for `/ws`, which cannot carry the auth headers.
+     * The server mints one even with authentication off, and ignores it then.
+     */
+    fun wsToken(): String = postObject("auth/ws-token").optString("token")
+
+    /**
+     * Opens Bambuddy's WebSocket. OkHttp pings it every [LIVE_PING_SECONDS],
+     * and a ping that goes unanswered fails the socket, which is how a
+     * connection the wifi has quietly dropped gets noticed at all.
+     */
+    fun openLive(token: String?, listener: WebSocketListener): WebSocket {
+        val request = Request.Builder().url(url("ws", "token" to token?.ifBlank { null })).build()
+        return liveClient.newWebSocket(request, listener)
+    }
+
+    private val liveClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(0, TimeUnit.SECONDS)
+            .pingInterval(LIVE_PING_SECONDS, TimeUnit.SECONDS)
+            .build()
+    }
 }
+
+/** How often the live socket is pinged; also roughly how long a dead one goes unnoticed. */
+const val LIVE_PING_SECONDS = 20L

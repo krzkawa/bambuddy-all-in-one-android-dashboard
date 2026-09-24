@@ -61,6 +61,13 @@ object Alerts {
     fun onTouch(ev: MotionEvent): Boolean = night?.onTouch(ev) ?: false
 
     private fun seen(ctx: Context, statuses: Map<Int, JSONObject>) {
+        // A status restored from disk at startup can be hours old. Comparing
+        // the first live poll with it would announce a print that finished
+        // overnight as if it had just happened, so it is never the baseline.
+        if (Repo.restored.value) {
+            last = emptyMap()
+            return
+        }
         val before = last
         last = statuses
         if (before.isEmpty()) return

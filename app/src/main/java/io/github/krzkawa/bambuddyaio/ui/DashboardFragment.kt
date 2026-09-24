@@ -38,8 +38,20 @@ class DashboardFragment : BaseFragment() {
         // The queue is not part of the status poll, so it gets a slow clock of
         // its own: what is next changes when a print ends, not second by second.
         observe(ticker(60_000)) { loadQueue() }
+        // The plug, the maintenance counters and the firmware each come from
+        // their own route on their own clock; each throttles itself.
+        observe(Power.plugs) { render() }
+        observe(Maintenance.items) { render() }
+        observe(Firmware.info) { render() }
+        observe(ticker(Power.POLL_MS)) { background({ Power.load(Repo.api, printerIds()) }) {} }
+        // On a cold start the first tick comes before the printer list does.
+        observe(Repo.printers) { background({ Power.load(Repo.api, printerIds()) }) {} }
+        observe(ticker(Maintenance.POLL_MS)) { background({ Maintenance.load(Repo.api) }) {} }
+        observe(ticker(Firmware.POLL_MS)) { background({ Firmware.load(Repo.api) }) {} }
         render()
     }
+
+    private fun printerIds(): List<Int> = Repo.printers.value.map { it.optInt("id", -1) }.filter { it >= 0 }
 
     private fun render() {
         val ctx = context ?: return
@@ -67,6 +79,9 @@ class DashboardFragment : BaseFragment() {
                     })
                     .append(Hms.faults(s).firstOrNull()?.description)
                     .append(s?.objects("hms_errors")?.size)
+                    .append(Power.signature(p.optInt("id")))
+                    .append(Maintenance.signature(p.optInt("id")))
+                    .append(Firmware.signature(p.optInt("id")))
             }
         }
         if (next == signature && list.childCount > 0) return
@@ -145,6 +160,15 @@ class DashboardFragment : BaseFragment() {
         badge.setTextColor(colour)
         top.addView(badge)
         Ui.push(ctx, top)
+        val plugChip = Power.chip(ctx, id, status)
+        plugChip?.let {
+            top.addView(it)
+            Ui.gap(ctx, top, Ui.S)
+        }
+        Firmware.badge(ctx, id)?.let {
+            top.addView(it)
+            Ui.gap(ctx, top, Ui.S)
+        }
         printer.str("model")?.let { top.addView(Ui.tiny(ctx, it)) }
         card.addView(top, Ui.wide(ctx))
 
@@ -158,6 +182,12 @@ class DashboardFragment : BaseFragment() {
         if (status == null) {
             card.addView(Ui.space(ctx, Ui.S))
             card.addView(Ui.dim(ctx, "The server has not reached this printer."))
+            // Often because it is off at the plug, which is the one thing
+            // that can still be done about it from here.
+            if (plugChip == null) Power.row(ctx, id, null)?.let {
+                card.addView(Ui.space(ctx, Ui.S))
+                card.addView(it, Ui.wide(ctx))
+            }
             return card
         }
 
@@ -282,6 +312,16 @@ class DashboardFragment : BaseFragment() {
                 line.addView(why)
             }
             card.addView(line, Ui.wide(ctx))
+        }
+
+        // Off, or not answering: then it earns a row, with the button.
+        if (plugChip == null) Power.row(ctx, id, status)?.let {
+            card.addView(Ui.space(ctx, Ui.XS))
+            card.addView(it, Ui.wide(ctx))
+        }
+        Maintenance.line(ctx, id)?.let {
+            card.addView(Ui.space(ctx, Ui.XS))
+            card.addView(it, Ui.wide(ctx))
         }
 
         val faults = Hms.faults(status)
