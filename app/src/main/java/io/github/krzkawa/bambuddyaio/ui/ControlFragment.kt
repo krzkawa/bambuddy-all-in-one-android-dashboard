@@ -36,6 +36,10 @@ class ControlFragment : BaseFragment() {
     /** Runs the pending temperature commands once he has stopped tapping. */
     private val settle = Handler(Looper.getMainLooper())
 
+    /** Parts of the machine card fed by their own polls rather than the status. */
+    private var powerHolder: LinearLayout? = null
+    private var upkeepHolder: LinearLayout? = null
+
     override fun build(ctx: Context) {
         picker = Ui.col(ctx)
         content.addView(picker, Ui.wide(ctx))
@@ -44,7 +48,43 @@ class ControlFragment : BaseFragment() {
 
         observe(Repo.statuses) { render() }
         observe(Repo.selected) { signature = ""; render() }
+        observe(Power.plugs) { fillPower() }
+        observe(Maintenance.items) { fillUpkeep() }
+        observe(Firmware.info) { live.forEach { it(Repo.statuses.value[Repo.selected.value]) } }
+        // Each of these asks the server on its own clock and throttles itself,
+        // so the Printers screen asking as well costs nothing extra.
+        observe(ticker(Power.POLL_MS)) { background({ Power.load(Repo.api, printerIds()) }) {} }
+        // On a cold start the first tick comes before the printer list does.
+        observe(Repo.printers) { background({ Power.load(Repo.api, printerIds()) }) {} }
+        observe(ticker(Maintenance.POLL_MS)) { background({ Maintenance.load(Repo.api) }) {} }
+        observe(ticker(Firmware.POLL_MS)) { background({ Firmware.load(Repo.api) }) {} }
         render()
+    }
+
+    private fun printerIds(): List<Int> = Repo.printers.value.map { it.optInt("id", -1) }.filter { it >= 0 }
+
+    private fun model(id: Int): String? =
+        Repo.printers.value.firstOrNull { it.optInt("id") == id }?.str("model")
+
+    private fun fillPower() {
+        val holder = powerHolder ?: return
+        val ctx = context ?: return
+        val id = Repo.selected.value
+        holder.removeAllViews()
+        Power.row(ctx, id, Repo.statuses.value[id])?.let {
+            holder.addView(it, Ui.wide(ctx))
+            holder.addView(Ui.space(ctx, Ui.S))
+        }
+    }
+
+    private fun fillUpkeep() {
+        val holder = upkeepHolder ?: return
+        val ctx = context ?: return
+        holder.removeAllViews()
+        Maintenance.line(ctx, Repo.selected.value)?.let {
+            holder.addView(Ui.space(ctx, Ui.S))
+            holder.addView(it, Ui.wide(ctx))
+        }
     }
 
     override fun onDestroyView() {
@@ -72,6 +112,9 @@ class ControlFragment : BaseFragment() {
                 .append((status?.int("printable_objects_count") ?: 0) > 1)
                 .append(faults.size).append(faults.firstOrNull()?.description)
                 .append(faults.flatMap { it.runnableActions })
+                .append(status?.bool("connected")).append(Power.busy(status))
+                .append(status?.optJSONArray("nozzles")?.length())
+                .append(PrintChecks.signature(status))
         }
         if (next == signature && body.childCount > 0) return
         signature = next
@@ -79,9 +122,17 @@ class ControlFragment : BaseFragment() {
         settle.removeCallbacksAndMessages(null)
         live.clear()
         body.removeAllViews()
+        powerHolder = null
+        upkeepHolder = null
 
         if (id < 0 || status == null) {
             body.addView(empty(ctx, "The server cannot reach this printer."))
+            // A printer that is off at the plug is exactly the one the server
+            // cannot reach, so the switch stays on offer here.
+            val holder = Ui.col(ctx)
+            body.addView(holder, Ui.wide(ctx))
+            powerHolder = holder
+            fillPower()
             return
         }
 
@@ -92,6 +143,20 @@ class ControlFragment : BaseFragment() {
         body.addView(fanSection(ctx, id, status))
         body.addView(Ui.space(ctx, Ui.M))
         body.addView(machineSection(ctx, id, status))
+
+        // Moving the machine is for an idle printer that is listening. Mid-print
+        // there is nothing on this card he should be able to press.
+        if (status.bool("connected") && !Power.busy(status)) {
+            body.addView(Ui.space(ctx, Ui.M))
+            val move = Ui.col(ctx)
+            body.addView(move, Ui.wide(ctx))
+            Move.fill(move, id, model(id), status)
+        }
+
+        PrintChecks.card(ctx, id, status)?.let {
+            body.addView(Ui.space(ctx, Ui.M))
+            body.addView(it)
+        }
 
         if (faults.isNotEmpty()) {
             body.addView(Ui.space(ctx, Ui.M))
@@ -173,7 +238,10 @@ class ControlFragment : BaseFragment() {
         status?.str("subtask_name") ?: status?.str("gcode_file") ?: "Nothing printing"
 
     private fun progressLine(status: JSONObject?): String {
-        val state = Ui.stateWord(status?.str("state"))
+        // The stage the firmware is in says more than "Printing" or "Preparing"
+        // while it levels the bed or calibrates, and Bambuddy already names it.
+        val stage = status?.str("stg_cur_name")?.takeIf { it != "Printing" && Power.busy(status) }
+        val state = stage ?: Ui.stateWord(status?.str("state"))
         val remaining = status?.int("remaining_time")
         return if (remaining == null || remaining <= 0) state
         else "$state · ${Ui.minutes(remaining)} left"
@@ -389,30 +457,42 @@ class ControlFragment : BaseFragment() {
     private fun machineSection(ctx: Context, id: Int, status: JSONObject): LinearLayout {
         val card = Ui.card(ctx)
         card.addView(Ui.heading(ctx, "Machine"))
+        val power = Ui.col(ctx)
+        card.addView(power, Ui.wide(ctx))
+        powerHolder = power
+        fillPower()
         val row = Ui.row(ctx)
         val lightOn = status.bool("chamber_light")
         row.addView(Ui.button(ctx, if (lightOn) "Light off" else "Light on", primary = !lightOn) {
             command("Light") { Repo.api.setLight(id, !lightOn) }
         })
+        // Homing moved to the Move card, which is only offered while the
+        // printer is idle: it was one question away from running mid-print.
         gap(ctx, row)
-        row.addView(Ui.button(ctx, "Home axes") {
-            androidx.appcompat.app.AlertDialog.Builder(ctx)
-                .setTitle("Home the axes?")
-                .setMessage("The printer will run its full homing sequence. Do not do this mid-print.")
-                .setPositiveButton("Home") { _, _ -> command("Home") { Repo.api.homeAxes(id) } }
-                .setNegativeButton("Cancel", null)
-                .show()
-        })
+        row.addView(Ui.button(ctx, "Maintenance") { Maintenance.choose(ctx, id, attentionOnly = false) })
         gap(ctx, row)
         row.addView(Ui.button(ctx, "Refresh") { command("Refresh") { Repo.api.refreshStatus(id) } })
+        if (PrintChecks.hasAirduct(model(id))) {
+            Ui.gap(ctx, row, Ui.L)
+            row.addView(PrintChecks.airduct(ctx, id, status), Ui.lp(ctx, 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
         card.addView(row, Ui.wide(ctx))
+        val upkeep = Ui.col(ctx)
+        card.addView(upkeep, Ui.wide(ctx))
+        upkeepHolder = upkeep
+        fillUpkeep()
 
         card.addView(Ui.space(ctx, Ui.M))
         val info = Ui.row(ctx)
         val network = Ui.stat(ctx, "Network", "—")
         val door = Ui.stat(ctx, "Door", "—")
         val sd = Ui.stat(ctx, "SD card", "—")
+        val firmware = Ui.stat(ctx, "Firmware", "—")
         live.add { s ->
+            val update = Firmware.update(id)
+            Ui.setStat(firmware, s?.str("firmware_version") ?: Firmware.info.value[id]?.current ?: "—")
+            (firmware.getChildAt(1) as? android.widget.TextView)?.text =
+                if (update?.latest != null) "Firmware · ${update.latest} out" else "Firmware"
             // wired_network is a real boolean on the status. A null wifi_signal
             // only ever meant "the printer did not say", which is not the same
             // as wired.
@@ -430,6 +510,9 @@ class ControlFragment : BaseFragment() {
         info.addView(door)
         gap(ctx, info, Ui.XL)
         info.addView(sd)
+        gap(ctx, info, Ui.XL)
+        info.addView(firmware)
+        firmware.setOnClickListener { Firmware.update(id)?.let { Firmware.explain(ctx, it) } }
         card.addView(info, Ui.wide(ctx))
         return card
     }

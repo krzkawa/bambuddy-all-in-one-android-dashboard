@@ -112,6 +112,9 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
                 val error = Repo.error.value.orEmpty()
                 (if (age == null) error else "$error · last update ${ago(age)}") to Ui.bad(this)
             }
+            // Read back from disk at startup, and the first poll is still out.
+            Repo.restored.value && age != null ->
+                "Connecting — last update ${ago(age)}" to Ui.dimColor(this)
             age != null && age > Repo.staleAfterMs() ->
                 "Not live — last update ${ago(age)}" to Ui.warn(this)
             notice != null ->

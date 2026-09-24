@@ -68,6 +68,10 @@ class Shots {
             .put("wired_network", true).put("door_open", false).put("sdcard", true)
             .put("tray_now", 0).put("printable_objects_count", 3)
             .put("supports_drying", true)
+            .put("firmware_version", "01.08.02.00")
+            .put("print_options", JSONObject()
+                .put("spaghetti_detector", true).put("first_layer_inspector", true)
+                .put("halt_print_sensitivity", "medium").put("auto_recovery_step_loss", true))
             .put("ams", ams)
     }
 
@@ -76,6 +80,9 @@ class Shots {
         .put("awaiting_plate_clear", true)
         .put("subtask_name", "calibration_cube.3mf")
         .put("temperatures", JSONObject().put("nozzle", 41.0).put("bed", 28.0))
+        .put("firmware_version", "01.07.00.00")
+        .put("print_options", JSONObject().put("spaghetti_detector", true)
+            .put("buildplate_marker_detector", true))
 
     /**
      * A stand-in Bambuddy, so the parts of a screen that come from a request
@@ -112,7 +119,7 @@ class Shots {
                             request.contains("printer-sensor-history") -> heaterHistory().toString()
                             request.contains("archives/stats") -> stats().toString()
                             request.contains("archives/slim") -> runs().toString()
-                            else -> "[]"
+                            else -> machineExtras(request) ?: "[]"
                         }
                         val bytes = body.toByteArray()
                         client.getOutputStream().apply {
@@ -216,6 +223,36 @@ class Shots {
         return out
     }
 
+    /** Plugs, maintenance counters and firmware, as the Printers and Control screens ask for them. */
+    private fun machineExtras(request: String): String? = when {
+        request.contains("smart-plugs/by-printer/1") ->
+            JSONObject().put("id", 7).put("name", "Shelf plug").put("plug_type", "tasmota").toString()
+        request.contains("smart-plugs/by-printer/2") ->
+            JSONObject().put("id", 8).put("name", "Desk plug").put("plug_type", "tasmota").toString()
+        request.contains("smart-plugs/7/status") ->
+            JSONObject().put("state", "ON").put("reachable", true)
+                .put("energy", JSONObject().put("power", 142.0).put("today", 0.84)).toString()
+        request.contains("smart-plugs/8/status") ->
+            JSONObject().put("state", "ON").put("reachable", true)
+                .put("energy", JSONObject().put("power", 9.0)).toString()
+        request.contains("maintenance/overview") -> JSONArray()
+            .put(JSONObject().put("printer_id", 1).put("maintenance_items", JSONArray()
+                .put(JSONObject().put("id", 31).put("maintenance_type_name", "Lubricate rods")
+                    .put("enabled", true).put("is_due", true).put("is_warning", false)
+                    .put("interval_type", "hours").put("hours_until_due", -12.0)
+                    .put("last_performed_at", "2026-08-01T10:00:00"))
+                .put(JSONObject().put("id", 32).put("maintenance_type_name", "Clean nozzle")
+                    .put("enabled", true).put("is_due", true).put("is_warning", false)
+                    .put("interval_type", "hours").put("hours_until_due", -3.0)
+                    .put("last_performed_at", "2026-08-01T10:00:00"))))
+            .toString()
+        request.contains("firmware/updates") -> JSONObject().put("updates", JSONArray()
+            .put(JSONObject().put("printer_id", 2).put("current_version", "01.07.00.00")
+                .put("latest_version", "01.08.01.00").put("update_available", true)))
+            .toString()
+        else -> null
+    }
+
     @Test
     fun shoot() {
         val app = org.robolectric.RuntimeEnvironment.getApplication()
@@ -270,6 +307,28 @@ class Shots {
         shadowOf(Looper.getMainLooper()).idle()
         val dialog = org.robolectric.shadows.ShadowDialog.getLatestDialog()
         captureDialog(activity.window.decorView, dialog.window!!.decorView, File(out, "heater-history.png"))
+        dialog.dismiss()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        // Control for an idle printer, where the Move card is offered: locked,
+        // then unlocked, each drawn at full length so nothing is cut off.
+        Repo.select(2)
+        listOf(false, true).forEach { open ->
+            val move = Class.forName("io.github.krzkawa.bambuddyaio.ui.Move")
+            move.getDeclaredField("unlockedFor").apply { isAccessible = true }.setInt(null, if (open) 2 else -1)
+            move.getDeclaredField("unlockedUntil").apply { isAccessible = true }
+                .setLong(null, if (open) System.currentTimeMillis() + 600_000L else 0L)
+            activity.showTab(1)
+            shadowOf(Looper.getMainLooper()).idle()
+            Thread.sleep(400)
+            Repo.stop()
+            shadowOf(Looper.getMainLooper()).idle()
+            captureFull(activity.window.decorView, File(out, if (open) "control-idle-unlocked.png" else "control-idle.png"))
+        }
+        Repo.select(1)
+        activity.showTab(1)
+        shadowOf(Looper.getMainLooper()).idle()
+        captureFull(activity.window.decorView, File(out, "control-full.png"))
     }
 
     private fun scrollToEnd(view: View) {
@@ -303,6 +362,30 @@ class Shots {
         canvas.translate((w - dw) / 2f, (h - dialog.measuredHeight) / 2f)
         dialog.draw(canvas)
         canvas.restore()
+        FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+
+    /** The screen's own scroller drawn at its whole height, for screens longer than the phone. */
+    private fun captureFull(root: View, file: File) {
+        capture(root, File(file.parentFile, "tmp.png"))
+        File(file.parentFile, "tmp.png").delete()
+        val scrollers = ArrayList<android.widget.ScrollView>()
+        fun walk(v: View) {
+            if (v is android.widget.ScrollView) scrollers.add(v)
+            if (v is android.view.ViewGroup) for (i in 0 until v.childCount) walk(v.getChildAt(i))
+        }
+        walk(root)
+        val scroller = scrollers.maxByOrNull { it.width } ?: return
+        val child = scroller.getChildAt(0) ?: return
+        child.measure(
+            View.MeasureSpec.makeMeasureSpec(scroller.width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        child.layout(0, 0, child.measuredWidth, child.measuredHeight)
+        val bitmap = Bitmap.createBitmap(child.measuredWidth, child.measuredHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        scroller.background?.let { it.setBounds(0, 0, bitmap.width, bitmap.height); it.draw(canvas) }
+        child.draw(canvas)
         FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
