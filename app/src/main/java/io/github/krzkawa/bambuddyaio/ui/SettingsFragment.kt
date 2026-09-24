@@ -113,6 +113,8 @@ class SettingsFragment : BaseFragment() {
         body.addView(refresh)
         body.addView(Ui.space(ctx, Ui.M))
 
+        addApplianceCards(ctx, body) { render() }
+
         val about = Ui.card(ctx)
         about.addView(Ui.heading(ctx, "Versions"))
         // He installs every build from the same release link, so the app has to

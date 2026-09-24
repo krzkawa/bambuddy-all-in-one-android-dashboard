@@ -163,9 +163,31 @@ class Shots {
             shadowOf(Looper.getMainLooper()).idle()
             capture(activity.window.decorView, File(out, "$name.png"))
         }
+
+        // Settings runs past one screen; the phone's own cards are further down.
+        activity.showTab(9)
+        shadowOf(Looper.getMainLooper()).idle()
+        val scroller = activity.findViewById<android.view.ViewGroup>(io.github.krzkawa.bambuddyaio.R.id.content_frame)
+            .getChildAt(0) as android.widget.ScrollView
+        listOf(1, 2, 3).forEach { page ->
+            capture(activity.window.decorView, File(out, "settings-$page.png")) {
+                scroller.scrollTo(0, page * 600)
+            }
+        }
+
+        // What a finished print looks like when it lands on the status strip.
+        activity.showTab(0)
+        io.github.krzkawa.bambuddyaio.appliance.Alerts.announce(
+            activity,
+            io.github.krzkawa.bambuddyaio.appliance.Events.between(
+                2, "P1S", status(), idle().put("state", "FINISH").put("subtask_name", "benchy.gcode.3mf")
+            )
+        )
+        shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(2))
+        capture(activity.window.decorView, File(out, "alert.png"))
     }
 
-    private fun capture(view: View, file: File) {
+    private fun capture(view: View, file: File, afterLayout: () -> Unit = {}) {
         val w = view.resources.displayMetrics.widthPixels
         val h = view.resources.displayMetrics.heightPixels
         view.measure(
@@ -173,6 +195,7 @@ class Shots {
             View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY)
         )
         view.layout(0, 0, w, h)
+        afterLayout()
         val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         view.draw(Canvas(bitmap))
         FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
