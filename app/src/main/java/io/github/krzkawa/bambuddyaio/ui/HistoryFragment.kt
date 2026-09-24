@@ -10,7 +10,7 @@ import io.github.krzkawa.bambuddyaio.util.objects
 import io.github.krzkawa.bambuddyaio.util.str
 import org.json.JSONObject
 
-/** Recent prints, newest first. */
+/** Recent prints, newest first. Tap one to see it and print it again. */
 class HistoryFragment : BaseFragment() {
 
     private lateinit var list: LinearLayout
@@ -26,7 +26,9 @@ class HistoryFragment : BaseFragment() {
         val ctx = context ?: return
         list.removeAllViews()
         list.addView(empty(ctx, "Loading…"))
-        background({ Repo.api.archives(40) }) { result ->
+        // The full listing rather than the slim one: only it carries each
+        // print's id, and without an id a row cannot be opened or reprinted.
+        background({ Repo.api.archiveList(40) }) { result ->
             result.onSuccess { render(it.objects()) }
             result.onFailure {
                 list.removeAllViews()
@@ -86,6 +88,18 @@ class HistoryFragment : BaseFragment() {
 
         val when_ = (row.str("completed_at") ?: row.str("started_at"))?.take(16)?.replace('T', ' ')
         if (when_ != null) line.addView(Ui.tiny(ctx, when_))
+
+        val id = row.int("id")
+        if (id != null) {
+            Ui.gap(ctx, line, Ui.S)
+            line.addView(Ui.tiny(ctx, "›"))
+            card.background = Ui.pressable(
+                ctx, Ui.rounded(Ui.cardColor(ctx), 10, ctx),
+                Ui.color(ctx, io.github.krzkawa.bambuddyaio.R.color.pressed), 10
+            )
+            card.isClickable = true
+            card.setOnClickListener { PrintFlow.open(this, ArchiveFragment.of(id)) }
+        }
 
         card.addView(line, Ui.wide(ctx))
         return card
