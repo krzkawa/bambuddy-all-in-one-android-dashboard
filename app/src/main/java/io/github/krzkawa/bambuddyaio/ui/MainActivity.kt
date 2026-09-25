@@ -389,6 +389,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback {
         tabs.forEachIndexed { index, tab ->
             val item = Ui.row(this)
             item.isClickable = true
+            item.setOnClickListener { showTab(index) }
 
             // A 3 dp edge marks the tab you are on. A filled pill behind the
             // label was the loudest thing on the screen and it never changes.
